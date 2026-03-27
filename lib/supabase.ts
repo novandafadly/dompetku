@@ -1,0 +1,99 @@
+import { createClient } from '@supabase/supabase-js'
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+
+export type Wallet = {
+  id: string
+  user_id: string
+  name: string
+  type: 'cash' | 'bank' | 'ewallet' | 'investment'
+  balance: number
+  icon: string | null
+  color: string | null
+  is_active: boolean
+  created_at: string
+}
+
+export type Category = {
+  id: string
+  user_id: string
+  name: string
+  type: 'income' | 'expense'
+  icon: string | null
+  color: string | null
+  is_default: boolean
+}
+
+export type Transaction = {
+  id: string
+  user_id: string
+  wallet_id: string
+  category_id: string | null
+  type: 'income' | 'expense'
+  amount: number
+  description: string | null
+  date: string
+  created_at: string
+  wallets?: Wallet
+  categories?: Category
+}
+
+export type Transfer = {
+  id: string
+  user_id: string
+  from_wallet_id: string
+  to_wallet_id: string
+  amount: number
+  note: string | null
+  date: string
+  created_at: string
+  from_wallet?: Wallet
+  to_wallet?: Wallet
+}
+
+export type Budget = {
+  id: string
+  user_id: string
+  category_id: string
+  amount: number
+  period_month: number
+  period_year: number
+  categories?: Category
+}
+
+export type Asset = {
+  id: string
+  user_id: string
+  name: string
+  type: 'investment' | 'property' | 'vehicle' | 'electronics' | 'other'
+  value: number
+  purchase_date: string | null
+  description: string | null
+}
+
+export type CreditCard = {
+  id: string
+  user_id: string
+  name: string
+  bank: string
+  card_limit: number
+  used_amount: number
+  billing_date: number | null
+  due_date: number | null
+  color: string | null
+}
+
+export type Debt = {
+  id: string
+  user_id: string
+  type: 'debt' | 'receivable'
+  person_name: string
+  total_amount: number
+  paid_amount: number
+  description: string | null
+  due_date: string | null
+  is_completed: boolean
+}
