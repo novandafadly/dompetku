@@ -8,21 +8,40 @@ import AppShell from '@/components/AppShell'
 import Modal from '@/components/Modal'
 import { toast } from '@/components/Toast'
 
+type FormState = {
+  wallet_id: string
+  category_id: string
+  type: 'income' | 'expense'
+  amount: string
+  description: string
+  date: string
+}
+
+const emptyForm: FormState = {
+  wallet_id: '',
+  category_id: '',
+  type: 'expense',
+  amount: '',
+  description: '',
+  date: new Date().toISOString().split('T')[0],
+}
+
 export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [wallets, setWallets] = useState<Wallet[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [showAdd, setShowAdd] = useState(false)
+  const [editing, setEditing] = useState<Transaction | null>(null)
   const [search, setSearch] = useState('')
   const [filterType, setFilterType] = useState('')
   const [filterCat, setFilterCat] = useState('')
-  const [form, setForm] = useState({ wallet_id: '', category_id: '', type: 'expense', amount: '', description: '', date: new Date().toISOString().split('T')[0] })
+  const [form, setForm] = useState<FormState>(emptyForm)
 
   useEffect(() => { load() }, [])
 
   async function load() {
     const [t, w, c] = await Promise.all([
-      supabase.from('transactions').select('*, categories(*), wallets(*)').order('date', { ascending: false }).limit(200),
+      supabase.from('transactions').select('*, categories(*), wallets(*)').order('date', { ascending: false }).order('created_at', { ascending: false }).limit(300),
       supabase.from('wallets').select('*').eq('is_active', true),
       supabase.from('categories').select('*').order('name'),
     ])
@@ -31,25 +50,59 @@ export default function TransactionsPage() {
     setCategories(c.data || [])
   }
 
-  async function addTransaction() {
+  function openAdd() {
+    setEditing(null)
+    setForm(emptyForm)
+    setShowAdd(true)
+  }
+
+  function openEdit(tx: Transaction) {
+    setEditing(tx)
+    setForm({
+      wallet_id: tx.wallet_id,
+      category_id: tx.category_id || '',
+      type: tx.type,
+      amount: String(tx.amount),
+      description: tx.description || '',
+      date: tx.date,
+    })
+    setShowAdd(true)
+  }
+
+  async function saveTransaction() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
     const amount = Number(form.amount)
     if (!amount || !form.wallet_id) { toast('Lengkapi data!', '⚠️'); return }
 
-    const { error } = await supabase.from('transactions').insert({
-      user_id: session.user.id,
-      wallet_id: form.wallet_id,
-      category_id: form.category_id || null,
-      type: form.type,
-      amount,
-      description: form.description || null,
-      date: form.date,
-    })
-    if (error) { toast(error.message, '❌'); return }
-    toast(`${form.type === 'income' ? 'Pemasukan' : 'Pengeluaran'} ditambahkan!`, form.type === 'income' ? '💰' : '💸')
+    if (editing) {
+      const { error } = await supabase.from('transactions').update({
+        wallet_id: form.wallet_id,
+        category_id: form.category_id || null,
+        type: form.type,
+        amount,
+        description: form.description || null,
+        date: form.date,
+      }).eq('id', editing.id)
+      if (error) { toast(error.message, '❌'); return }
+      toast('Transaksi diperbarui!', '✅')
+    } else {
+      const { error } = await supabase.from('transactions').insert({
+        user_id: session.user.id,
+        wallet_id: form.wallet_id,
+        category_id: form.category_id || null,
+        type: form.type,
+        amount,
+        description: form.description || null,
+        date: form.date,
+      })
+      if (error) { toast(error.message, '❌'); return }
+      toast(`${form.type === 'income' ? 'Pemasukan' : 'Pengeluaran'} ditambahkan!`, form.type === 'income' ? '💰' : '💸')
+    }
+
     setShowAdd(false)
-    setForm({ wallet_id: '', category_id: '', type: 'expense', amount: '', description: '', date: new Date().toISOString().split('T')[0] })
+    setEditing(null)
+    setForm(emptyForm)
     load()
   }
 
@@ -74,6 +127,9 @@ export default function TransactionsPage() {
 
   const filteredCats = categories.filter(c => !form.type || c.type === form.type)
 
+  const totalIncome = useMemo(() => filtered.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0), [filtered])
+  const totalExpense = useMemo(() => filtered.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0), [filtered])
+
   return (
     <AppShell>
       <div className="flex items-center justify-between mb-6">
@@ -81,8 +137,22 @@ export default function TransactionsPage() {
           <h1 className="text-2xl font-extrabold text-surface-900">Transaksi</h1>
           <p className="text-sm text-surface-400">{transactions.length} transaksi</p>
         </div>
-        <button onClick={() => setShowAdd(true)} className="btn btn-primary">+ Tambah</button>
+        <button onClick={openAdd} className="btn btn-primary">+ Tambah</button>
       </div>
+
+      {/* Summary bar */}
+      {(filterType || filterCat || search) && (
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <div className="card p-3 flex items-center gap-2">
+            <span className="text-green-500 font-bold text-xs uppercase">Pemasukan</span>
+            <span className="font-mono font-bold text-green-600 ml-auto">{formatCurrency(totalIncome)}</span>
+          </div>
+          <div className="card p-3 flex items-center gap-2">
+            <span className="text-red-500 font-bold text-xs uppercase">Pengeluaran</span>
+            <span className="font-mono font-bold text-red-500 ml-auto">{formatCurrency(totalExpense)}</span>
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="card p-4 mb-6">
@@ -105,7 +175,7 @@ export default function TransactionsPage() {
         {filtered.length > 0 ? (
           <div className="divide-y divide-surface-100">
             {filtered.map((tx) => (
-              <div key={tx.id} className="flex items-center gap-3 p-4 hover:bg-surface-50 transition-colors">
+              <div key={tx.id} className="flex items-center gap-3 p-4 hover:bg-surface-50 transition-colors group">
                 <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg flex-shrink-0" style={{
                   background: tx.type === 'income' ? '#dcfce7' : '#fee2e2',
                 }}>
@@ -123,7 +193,10 @@ export default function TransactionsPage() {
                 <p className={`text-sm font-bold font-mono flex-shrink-0 ${tx.type === 'income' ? 'text-green-600' : 'text-red-500'}`}>
                   {tx.type === 'income' ? '+' : '-'}{formatCurrency(Number(tx.amount))}
                 </p>
-                <button onClick={() => deleteTx(tx.id)} className="text-surface-300 hover:text-red-500 text-xs ml-2 flex-shrink-0">✕</button>
+                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-1">
+                  <button onClick={() => openEdit(tx)} className="w-7 h-7 rounded-lg hover:bg-brand-50 hover:text-brand-600 flex items-center justify-center text-surface-400 text-xs transition-colors">✏️</button>
+                  <button onClick={() => deleteTx(tx.id)} className="w-7 h-7 rounded-lg hover:bg-red-50 hover:text-red-500 flex items-center justify-center text-surface-400 text-xs transition-colors">✕</button>
+                </div>
               </div>
             ))}
           </div>
@@ -135,8 +208,8 @@ export default function TransactionsPage() {
         )}
       </div>
 
-      {/* Add Transaction Modal */}
-      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Tambah Transaksi">
+      {/* Add/Edit Transaction Modal */}
+      <Modal open={showAdd} onClose={() => { setShowAdd(false); setEditing(null) }} title={editing ? 'Edit Transaksi' : 'Tambah Transaksi'}>
         <div className="space-y-4">
           <div>
             <label className="label">Tipe</label>
@@ -171,7 +244,12 @@ export default function TransactionsPage() {
             <label className="label">Tanggal</label>
             <input className="input" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
           </div>
-          <button onClick={addTransaction} className="btn btn-primary w-full">Simpan</button>
+          <div className="flex gap-2">
+            {editing && (
+              <button onClick={() => { deleteTx(editing.id); setShowAdd(false) }} className="btn btn-danger flex-1">Hapus</button>
+            )}
+            <button onClick={saveTransaction} className="btn btn-primary flex-1">{editing ? 'Simpan Perubahan' : 'Simpan'}</button>
+          </div>
         </div>
       </Modal>
     </AppShell>
