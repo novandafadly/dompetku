@@ -1,3 +1,5 @@
+import type { Pocket } from './supabase'
+
 export function formatCurrency(amount: number): string {
   return new Intl.NumberFormat('id-ID', {
     style: 'currency',
@@ -8,10 +10,12 @@ export function formatCurrency(amount: number): string {
 }
 
 export function formatShort(amount: number): string {
-  if (amount >= 1_000_000_000) return `Rp ${(amount / 1_000_000_000).toFixed(1)}M`
-  if (amount >= 1_000_000) return `Rp ${(amount / 1_000_000).toFixed(1)}jt`
-  if (amount >= 1_000) return `Rp ${(amount / 1_000).toFixed(0)}rb`
-  return `Rp ${amount}`
+  const abs = Math.abs(amount)
+  const sign = amount < 0 ? '-' : ''
+  if (abs >= 1_000_000_000) return `${sign}Rp ${(abs / 1_000_000_000).toFixed(1)}M`
+  if (abs >= 1_000_000) return `${sign}Rp ${(abs / 1_000_000).toFixed(1)}jt`
+  if (abs >= 1_000) return `${sign}Rp ${(abs / 1_000).toFixed(0)}rb`
+  return `${sign}Rp ${abs}`
 }
 
 export function formatDate(date: string): string {
@@ -48,7 +52,40 @@ export const ASSET_ICONS: Record<string, string> = {
   other: '📦',
 }
 
+export const POCKET_META: Record<Pocket, { label: string; icon: string; color: string; bg: string; desc: string }> = {
+  operasional: {
+    label: 'Operasional',
+    icon: '💳',
+    color: 'text-blue-600',
+    bg: 'bg-blue-50',
+    desc: 'Uang untuk kebutuhan sehari-hari',
+  },
+  tabungan: {
+    label: 'Tabungan',
+    icon: '🏦',
+    color: 'text-green-600',
+    bg: 'bg-green-50',
+    desc: 'Dana yang tidak disentuh',
+  },
+  kantor: {
+    label: 'Kantor',
+    icon: '🏢',
+    color: 'text-purple-600',
+    bg: 'bg-purple-50',
+    desc: 'Dana reimbursement / operasional kantor',
+  },
+}
+
+export const FREQUENCY_META: Record<string, { label: string; icon: string }> = {
+  daily:   { label: 'Harian',   icon: '📅' },
+  weekly:  { label: 'Mingguan', icon: '📆' },
+  monthly: { label: 'Bulanan',  icon: '🗓️' },
+  yearly:  { label: 'Tahunan',  icon: '📋' },
+}
+
 export const MONTHS = [
   'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
   'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
 ]
+
+export const DAYS = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu']
