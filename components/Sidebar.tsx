@@ -10,9 +10,10 @@ const NAV_ITEMS = [
   { href: '/wallets', label: 'Dompet', icon: '💳' },
   { href: '/transactions', label: 'Transaksi', icon: '📝' },
   { href: '/budgets', label: 'Anggaran', icon: '🎯' },
-  { href: '/assets', label: 'Aset', icon: '🏦' },
+  { href: '/assets', label: 'Aset & Saham', icon: '🏦' },
   { href: '/credit-cards', label: 'Kartu Kredit', icon: '💎' },
   { href: '/debts', label: 'Utang/Piutang', icon: '🤝' },
+  { href: '/categories', label: 'Kategori', icon: '🏷️' },
 ]
 
 export default function Sidebar({ userName }: { userName?: string }) {
