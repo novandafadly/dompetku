@@ -69,11 +69,61 @@ export default function TransactionsPage() {
     setShowAdd(true)
   }
 
+  // Check if selected category is investment-related
+  function isInvestmentCategory(catId: string): boolean {
+    const cat = categories.find(c => c.id === catId)
+    if (!cat) return false
+    const name = cat.name.toLowerCase()
+    return name.includes('invest') || name.includes('saham') || name.includes('reksa') || name.includes('obligasi') || name.includes('crypto')
+  }
+
+  // Auto-create or update asset when investment expense is added
+  async function handleInvestmentAutoLink(session: any, amount: number, description: string, date: string) {
+    const catName = categories.find(c => c.id === form.category_id)?.name || 'Investasi'
+    const assetName = description || catName
+
+    // Check if an asset with this name already exists (non-ticker based)
+    const { data: existing } = await supabase
+      .from('assets')
+      .select('id, value')
+      .eq('user_id', session.user.id)
+      .eq('name', assetName)
+      .eq('type', 'investment')
+      .is('ticker', null)
+      .maybeSingle()
+
+    if (existing) {
+      // Update existing asset value
+      await supabase.from('assets').update({
+        value: Number(existing.value) + amount,
+        updated_at: new Date().toISOString(),
+      }).eq('id', existing.id)
+      toast(`Aset "${assetName}" diperbarui +${new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(amount)}`, '📈')
+    } else {
+      // Create new asset
+      await supabase.from('assets').insert({
+        user_id: session.user.id,
+        name: assetName,
+        type: 'investment',
+        value: amount,
+        purchase_date: date,
+        description: `Auto dari transaksi ${catName}`,
+        ticker: null,
+        qty: 0,
+        avg_price: 0,
+        current_price: 0,
+      })
+      toast(`Aset "${assetName}" otomatis ditambahkan!`, '🏦')
+    }
+  }
+
   async function saveTransaction() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
     const amount = Number(form.amount)
     if (!amount || !form.wallet_id) { toast('Lengkapi data!', '⚠️'); return }
+
+    const isInvest = form.type === 'expense' && form.category_id && isInvestmentCategory(form.category_id)
 
     if (editing) {
       const { error } = await supabase.from('transactions').update({
@@ -98,6 +148,11 @@ export default function TransactionsPage() {
       })
       if (error) { toast(error.message, '❌'); return }
       toast(`${form.type === 'income' ? 'Pemasukan' : 'Pengeluaran'} ditambahkan!`, form.type === 'income' ? '💰' : '💸')
+
+      // Auto-link to assets if investment category
+      if (isInvest) {
+        await handleInvestmentAutoLink(session, amount, form.description, form.date)
+      }
     }
 
     setShowAdd(false)
@@ -244,6 +299,13 @@ export default function TransactionsPage() {
             <label className="label">Tanggal</label>
             <input className="input" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
           </div>
+          {/* Auto-link indicator */}
+          {!editing && form.type === 'expense' && form.category_id && isInvestmentCategory(form.category_id) && (
+            <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+              <span className="text-base">📈</span>
+              <span>Transaksi ini akan <strong>otomatis tercatat di Aset Investasi</strong> dengan nama "{form.description || categories.find(c => c.id === form.category_id)?.name}".</span>
+            </div>
+          )}
           <div className="flex gap-2">
             {editing && (
               <button onClick={() => { deleteTx(editing.id); setShowAdd(false) }} className="btn btn-danger flex-1">Hapus</button>
