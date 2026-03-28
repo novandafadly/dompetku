@@ -5,11 +5,14 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
+export type Pocket = 'operasional' | 'tabungan' | 'kantor'
+
 export type Wallet = {
   id: string
   user_id: string
   name: string
   type: 'cash' | 'bank' | 'ewallet' | 'investment'
+  pocket: Pocket
   balance: number
   icon: string | null
   color: string | null
@@ -73,7 +76,6 @@ export type Asset = {
   value: number
   purchase_date: string | null
   description: string | null
-  // stock fields
   ticker: string | null
   qty: number | null
   avg_price: number | null
@@ -117,4 +119,24 @@ export type Debt = {
   description: string | null
   due_date: string | null
   is_completed: boolean
+}
+
+export type RecurringTransaction = {
+  id: string
+  user_id: string
+  wallet_id: string | null
+  category_id: string | null
+  type: 'income' | 'expense'
+  amount: number
+  description: string | null
+  frequency: 'daily' | 'weekly' | 'monthly' | 'yearly'
+  day_of_month: number | null
+  day_of_week: number | null
+  next_due: string
+  last_executed: string | null
+  is_active: boolean
+  auto_execute: boolean
+  created_at: string
+  wallets?: Wallet
+  categories?: Category
 }
