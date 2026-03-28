@@ -6,14 +6,15 @@ import { supabase } from '@/lib/supabase'
 import { useState } from 'react'
 
 const NAV_ITEMS = [
-  { href: '/dashboard', label: 'Dashboard', icon: '📊' },
-  { href: '/wallets', label: 'Dompet', icon: '💳' },
-  { href: '/transactions', label: 'Transaksi', icon: '📝' },
-  { href: '/budgets', label: 'Anggaran', icon: '🎯' },
-  { href: '/assets', label: 'Aset & Saham', icon: '🏦' },
-  { href: '/credit-cards', label: 'Kartu Kredit', icon: '💎' },
-  { href: '/debts', label: 'Utang/Piutang', icon: '🤝' },
-  { href: '/categories', label: 'Kategori', icon: '🏷️' },
+  { href: '/dashboard',    label: 'Dashboard',      icon: '📊' },
+  { href: '/wallets',      label: 'Dompet',          icon: '💳' },
+  { href: '/transactions', label: 'Transaksi',       icon: '📝' },
+  { href: '/recurring',    label: 'Tagihan Rutin',   icon: '🔄' },
+  { href: '/budgets',      label: 'Anggaran',        icon: '🎯' },
+  { href: '/assets',       label: 'Aset & Saham',    icon: '🏦' },
+  { href: '/credit-cards', label: 'Kartu Kredit',    icon: '💎' },
+  { href: '/debts',        label: 'Utang/Piutang',   icon: '🤝' },
+  { href: '/categories',   label: 'Kategori',        icon: '🏷️' },
 ]
 
 export default function Sidebar({ userName }: { userName?: string }) {
@@ -28,7 +29,6 @@ export default function Sidebar({ userName }: { userName?: string }) {
 
   return (
     <>
-      {/* Mobile hamburger */}
       <button
         onClick={() => setMobileOpen(true)}
         className="lg:hidden fixed top-4 left-4 z-50 w-10 h-10 bg-white rounded-xl shadow-md flex items-center justify-center border border-surface-200"
@@ -38,18 +38,13 @@ export default function Sidebar({ userName }: { userName?: string }) {
         </svg>
       </button>
 
-      {/* Overlay */}
-      {mobileOpen && (
-        <div className="lg:hidden fixed inset-0 bg-black/30 z-40" onClick={() => setMobileOpen(false)} />
-      )}
+      {mobileOpen && <div className="lg:hidden fixed inset-0 bg-black/30 z-40" onClick={() => setMobileOpen(false)} />}
 
-      {/* Sidebar */}
       <aside className={cn(
         'fixed top-0 left-0 h-full w-64 bg-white border-r border-surface-200/60 z-40 flex flex-col transition-transform duration-300',
         'lg:translate-x-0',
         mobileOpen ? 'translate-x-0' : '-translate-x-full'
       )}>
-        {/* Logo */}
         <div className="px-6 py-6 border-b border-surface-100">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-brand-600 rounded-xl flex items-center justify-center shadow-sm">
@@ -62,16 +57,12 @@ export default function Sidebar({ userName }: { userName?: string }) {
           </div>
         </div>
 
-        {/* Navigation */}
-        <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+        <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
           {NAV_ITEMS.map((item) => (
             <button
               key={item.href}
               onClick={() => { router.push(item.href); setMobileOpen(false) }}
-              className={cn(
-                'nav-link w-full',
-                pathname === item.href && 'nav-link-active'
-              )}
+              className={cn('nav-link w-full', pathname === item.href && 'nav-link-active')}
             >
               <span className="text-lg">{item.icon}</span>
               <span>{item.label}</span>
@@ -79,7 +70,6 @@ export default function Sidebar({ userName }: { userName?: string }) {
           ))}
         </nav>
 
-        {/* User section */}
         <div className="p-4 border-t border-surface-100">
           <div className="flex items-center gap-3 mb-3 px-2">
             <div className="w-9 h-9 bg-brand-100 rounded-xl flex items-center justify-center text-brand-700 font-bold text-sm">
