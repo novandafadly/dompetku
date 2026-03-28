@@ -12,7 +12,8 @@ export default function BudgetsPage() {
   const [budgets, setBudgets] = useState<Budget[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
-  const [showAdd, setShowAdd] = useState(false)
+  const [showModal, setShowModal] = useState(false)
+  const [editing, setEditing] = useState<Budget | null>(null)
   const now = new Date()
   const [form, setForm] = useState({ category_id: '', amount: '' })
 
@@ -22,7 +23,7 @@ export default function BudgetsPage() {
     const startOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
     const [b, c, t] = await Promise.all([
       supabase.from('budgets').select('*, categories(*)').eq('period_month', now.getMonth() + 1).eq('period_year', now.getFullYear()),
-      supabase.from('categories').select('*').eq('type', 'expense'),
+      supabase.from('categories').select('*').eq('type', 'expense').order('name'),
       supabase.from('transactions').select('*').eq('type', 'expense').gte('date', startOfMonth),
     ])
     setBudgets(b.data || [])
@@ -30,21 +31,45 @@ export default function BudgetsPage() {
     setTransactions(t.data || [])
   }
 
-  async function addBudget() {
+  function openAdd() {
+    setEditing(null)
+    setForm({ category_id: '', amount: '' })
+    setShowModal(true)
+  }
+
+  function openEdit(b: Budget) {
+    setEditing(b)
+    setForm({ category_id: b.category_id, amount: String(b.amount) })
+    setShowModal(true)
+  }
+
+  async function saveBudget() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
     const amount = Number(form.amount)
     if (!amount || !form.category_id) { toast('Lengkapi data!', '⚠️'); return }
-    const { error } = await supabase.from('budgets').insert({
-      user_id: session.user.id,
-      category_id: form.category_id,
-      amount,
-      period_month: now.getMonth() + 1,
-      period_year: now.getFullYear(),
-    })
-    if (error) { toast(error.message === 'duplicate key value violates unique constraint "budgets_user_id_category_id_period_month_period_year_key"' ? 'Budget untuk kategori ini sudah ada!' : error.message, '❌'); return }
-    toast('Anggaran ditambahkan!', '🎯')
-    setShowAdd(false)
+
+    if (editing) {
+      const { error } = await supabase.from('budgets').update({ amount, category_id: form.category_id }).eq('id', editing.id)
+      if (error) { toast(error.message, '❌'); return }
+      toast('Anggaran diperbarui!', '✅')
+    } else {
+      const { error } = await supabase.from('budgets').insert({
+        user_id: session.user.id,
+        category_id: form.category_id,
+        amount,
+        period_month: now.getMonth() + 1,
+        period_year: now.getFullYear(),
+      })
+      if (error) {
+        const isDupe = error.message.includes('duplicate key')
+        toast(isDupe ? 'Budget untuk kategori ini sudah ada!' : error.message, '❌')
+        return
+      }
+      toast('Anggaran ditambahkan!', '🎯')
+    }
+    setShowModal(false)
+    setEditing(null)
     setForm({ category_id: '', amount: '' })
     load()
   }
@@ -68,7 +93,7 @@ export default function BudgetsPage() {
           <h1 className="text-2xl font-extrabold text-surface-900">Anggaran</h1>
           <p className="text-sm text-surface-400">{MONTHS[now.getMonth()]} {now.getFullYear()}</p>
         </div>
-        <button onClick={() => setShowAdd(true)} className="btn btn-primary">+ Set Anggaran</button>
+        <button onClick={openAdd} className="btn btn-primary">+ Set Anggaran</button>
       </div>
 
       {/* Summary */}
@@ -103,14 +128,17 @@ export default function BudgetsPage() {
           const pct = Math.min((spent / Number(b.amount)) * 100, 100)
           const over = spent > Number(b.amount)
           return (
-            <div key={b.id} className="card p-5">
+            <div key={b.id} className="card p-5 group">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <span className="text-lg">{b.categories?.icon}</span>
                   <span className="font-semibold text-surface-800">{b.categories?.name}</span>
                   {over && <span className="badge bg-red-100 text-red-700">Over Budget!</span>}
                 </div>
-                <button onClick={() => deleteBudget(b.id)} className="text-surface-300 hover:text-red-500 text-xs">✕</button>
+                <div className="flex items-center gap-1">
+                  <button onClick={() => openEdit(b)} className="opacity-0 group-hover:opacity-100 w-7 h-7 rounded-lg hover:bg-brand-50 text-surface-400 hover:text-brand-600 flex items-center justify-center text-xs transition-all">✏️</button>
+                  <button onClick={() => deleteBudget(b.id)} className="opacity-0 group-hover:opacity-100 w-7 h-7 rounded-lg hover:bg-red-50 text-surface-400 hover:text-red-500 flex items-center justify-center text-xs transition-all">✕</button>
+                </div>
               </div>
               <div className="progress-bar mb-2">
                 <div className="progress-fill" style={{
@@ -133,11 +161,11 @@ export default function BudgetsPage() {
         )}
       </div>
 
-      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Set Anggaran">
+      <Modal open={showModal} onClose={() => { setShowModal(false); setEditing(null) }} title={editing ? 'Edit Anggaran' : 'Set Anggaran'}>
         <div className="space-y-4">
           <div>
             <label className="label">Kategori Pengeluaran</label>
-            <select className="input" value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })}>
+            <select className="input" value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })} disabled={!!editing}>
               <option value="">Pilih kategori</option>
               {categories.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
             </select>
@@ -146,7 +174,12 @@ export default function BudgetsPage() {
             <label className="label">Batas Anggaran</label>
             <input className="input" type="number" placeholder="0" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
           </div>
-          <button onClick={addBudget} className="btn btn-primary w-full">Simpan</button>
+          <div className="flex gap-2">
+            {editing && (
+              <button onClick={() => { deleteBudget(editing.id); setShowModal(false) }} className="btn btn-danger flex-1">Hapus</button>
+            )}
+            <button onClick={saveBudget} className="btn btn-primary flex-1">{editing ? 'Simpan Perubahan' : 'Simpan'}</button>
+          </div>
         </div>
       </Modal>
     </AppShell>
