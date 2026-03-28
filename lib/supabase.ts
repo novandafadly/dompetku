@@ -140,3 +140,18 @@ export type RecurringTransaction = {
   wallets?: Wallet
   categories?: Category
 }
+
+export type SavingsGoal = {
+  id: string
+  user_id: string
+  wallet_id: string
+  name: string
+  target_amount: number
+  target_date: string | null
+  icon: string
+  color: string
+  is_completed: boolean
+  created_at: string
+  updated_at: string
+  wallets?: Wallet
+}
