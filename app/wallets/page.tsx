@@ -8,12 +8,23 @@ import AppShell from '@/components/AppShell'
 import Modal from '@/components/Modal'
 import { toast } from '@/components/Toast'
 
+type WalletType = 'cash' | 'bank' | 'ewallet' | 'investment'
+
+type WalletForm = {
+  name: string
+  type: WalletType
+  balance: string
+}
+
+const emptyWalletForm: WalletForm = { name: '', type: 'cash', balance: '' }
+
 export default function WalletsPage() {
   const [wallets, setWallets] = useState<Wallet[]>([])
   const [transfers, setTransfers] = useState<Transfer[]>([])
   const [showAdd, setShowAdd] = useState(false)
   const [showTransfer, setShowTransfer] = useState(false)
-  const [form, setForm] = useState({ name: '', type: 'cash', balance: '' })
+  const [editing, setEditing] = useState<Wallet | null>(null)
+  const [form, setForm] = useState<WalletForm>(emptyWalletForm)
   const [tForm, setTForm] = useState({ from_wallet_id: '', to_wallet_id: '', amount: '', note: '' })
 
   useEffect(() => { load() }, [])
@@ -27,21 +38,48 @@ export default function WalletsPage() {
     setTransfers(t.data || [])
   }
 
-  async function addWallet() {
+  function openAdd() {
+    setEditing(null)
+    setForm(emptyWalletForm)
+    setShowAdd(true)
+  }
+
+  function openEdit(w: Wallet) {
+    setEditing(w)
+    setForm({ name: w.name, type: w.type as WalletType, balance: String(w.balance) })
+    setShowAdd(true)
+  }
+
+  async function saveWallet() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
-    const { error } = await supabase.from('wallets').insert({
-      user_id: session.user.id,
-      name: form.name,
-      type: form.type,
-      balance: Number(form.balance) || 0,
-      icon: WALLET_ICONS[form.type],
-      color: WALLET_COLORS[form.type],
-    })
-    if (error) { toast(error.message, '❌'); return }
-    toast('Dompet berhasil ditambahkan!', '💳')
+    if (!form.name) { toast('Nama dompet wajib diisi!', '⚠️'); return }
+
+    if (editing) {
+      const { error } = await supabase.from('wallets').update({
+        name: form.name,
+        type: form.type,
+        balance: Number(form.balance) || 0,
+        icon: WALLET_ICONS[form.type],
+        color: WALLET_COLORS[form.type],
+      }).eq('id', editing.id)
+      if (error) { toast(error.message, '❌'); return }
+      toast('Dompet diperbarui!', '✅')
+    } else {
+      const { error } = await supabase.from('wallets').insert({
+        user_id: session.user.id,
+        name: form.name,
+        type: form.type,
+        balance: Number(form.balance) || 0,
+        icon: WALLET_ICONS[form.type],
+        color: WALLET_COLORS[form.type],
+      })
+      if (error) { toast(error.message, '❌'); return }
+      toast('Dompet berhasil ditambahkan!', '💳')
+    }
     setShowAdd(false)
-    setForm({ name: '', type: 'cash', balance: '' })
+    setEditing(null)
+    setForm(emptyWalletForm)
     load()
   }
 
@@ -76,6 +114,13 @@ export default function WalletsPage() {
     load()
   }
 
+  async function deleteTransfer(id: string) {
+    if (!confirm('Hapus transfer ini? Saldo dompet akan dikembalikan.')) return
+    await supabase.from('transfers').delete().eq('id', id)
+    toast('Transfer dihapus', '🗑️')
+    load()
+  }
+
   const totalBalance = wallets.reduce((s, w) => s + Number(w.balance), 0)
 
   return (
@@ -87,20 +132,23 @@ export default function WalletsPage() {
         </div>
         <div className="flex gap-2">
           <button onClick={() => setShowTransfer(true)} className="btn btn-secondary">⇄ Transfer</button>
-          <button onClick={() => setShowAdd(true)} className="btn btn-primary">+ Tambah</button>
+          <button onClick={openAdd} className="btn btn-primary">+ Tambah</button>
         </div>
       </div>
 
       {/* Wallet Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
         {wallets.map((w) => (
-          <div key={w.id} className="card-hover p-5 relative overflow-hidden">
+          <div key={w.id} className="card-hover p-5 relative overflow-hidden group">
             <div className="absolute top-0 right-0 w-24 h-24 rounded-full opacity-10" style={{ background: w.color || '#3b82f6', transform: 'translate(30%, -30%)' }} />
             <div className="flex items-start justify-between mb-4">
               <div className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl" style={{ background: (w.color || '#3b82f6') + '18' }}>
                 {w.icon || '💳'}
               </div>
-              <button onClick={() => deleteWallet(w.id)} className="text-surface-300 hover:text-red-500 text-xs transition-colors">✕</button>
+              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button onClick={() => openEdit(w)} className="w-7 h-7 rounded-lg hover:bg-brand-50 text-surface-400 hover:text-brand-600 flex items-center justify-center text-xs transition-colors">✏️</button>
+                <button onClick={() => deleteWallet(w.id)} className="w-7 h-7 rounded-lg hover:bg-red-50 text-surface-400 hover:text-red-500 flex items-center justify-center text-xs transition-colors">✕</button>
+              </div>
             </div>
             <p className="text-sm font-semibold text-surface-800">{w.name}</p>
             <p className="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-2">{w.type}</p>
@@ -124,13 +172,14 @@ export default function WalletsPage() {
               const from = wallets.find(w => w.id === t.from_wallet_id)
               const to = wallets.find(w => w.id === t.to_wallet_id)
               return (
-                <div key={t.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-surface-50 transition-colors">
+                <div key={t.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-surface-50 transition-colors group">
                   <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center text-lg">⇄</div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-surface-800">{from?.name || '?'} → {to?.name || '?'}</p>
                     <p className="text-[10px] text-surface-400">{formatDate(t.date)}{t.note ? ` · ${t.note}` : ''}</p>
                   </div>
                   <p className="text-sm font-bold font-mono text-blue-600">{formatCurrency(Number(t.amount))}</p>
+                  <button onClick={() => deleteTransfer(t.id)} className="opacity-0 group-hover:opacity-100 text-surface-300 hover:text-red-500 text-xs w-6 h-6 flex items-center justify-center transition-all">✕</button>
                 </div>
               )
             })}
@@ -138,8 +187,8 @@ export default function WalletsPage() {
         </div>
       )}
 
-      {/* Add Wallet Modal */}
-      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Tambah Dompet">
+      {/* Add/Edit Wallet Modal */}
+      <Modal open={showAdd} onClose={() => { setShowAdd(false); setEditing(null) }} title={editing ? 'Edit Dompet' : 'Tambah Dompet'}>
         <div className="space-y-4">
           <div>
             <label className="label">Nama Dompet</label>
@@ -147,7 +196,7 @@ export default function WalletsPage() {
           </div>
           <div>
             <label className="label">Tipe</label>
-            <select className="input" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
+            <select className="input" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as WalletType })}>
               <option value="cash">💵 Cash</option>
               <option value="bank">🏦 Bank</option>
               <option value="ewallet">📱 E-Wallet</option>
@@ -155,10 +204,15 @@ export default function WalletsPage() {
             </select>
           </div>
           <div>
-            <label className="label">Saldo Awal</label>
+            <label className="label">{editing ? 'Saldo Saat Ini' : 'Saldo Awal'}</label>
             <input className="input" type="number" placeholder="0" value={form.balance} onChange={(e) => setForm({ ...form, balance: e.target.value })} />
           </div>
-          <button onClick={addWallet} className="btn btn-primary w-full">Simpan</button>
+          <div className="flex gap-2">
+            {editing && (
+              <button onClick={() => { deleteWallet(editing.id); setShowAdd(false) }} className="btn btn-danger flex-1">Hapus</button>
+            )}
+            <button onClick={saveWallet} className="btn btn-primary flex-1">{editing ? 'Simpan Perubahan' : 'Simpan'}</button>
+          </div>
         </div>
       </Modal>
 
