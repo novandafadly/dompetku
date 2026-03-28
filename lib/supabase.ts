@@ -25,6 +25,7 @@ export type Category = {
   icon: string | null
   color: string | null
   is_default: boolean
+  created_at: string
 }
 
 export type Transaction = {
@@ -72,6 +73,26 @@ export type Asset = {
   value: number
   purchase_date: string | null
   description: string | null
+  // stock fields
+  ticker: string | null
+  qty: number | null
+  avg_price: number | null
+  current_price: number | null
+  last_price_update: string | null
+  created_at: string
+}
+
+export type InvestmentLot = {
+  id: string
+  user_id: string
+  asset_id: string
+  action: 'buy' | 'sell'
+  qty: number
+  price: number
+  total_amount: number
+  date: string
+  note: string | null
+  created_at: string
 }
 
 export type CreditCard = {
