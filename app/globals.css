@@ -16,25 +16,30 @@
 * {
   scrollbar-width: thin;
   scrollbar-color: #334155 transparent;
+  /* Prevent text size inflate on mobile */
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
   font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
   background: #f1f5f9;
   color: #0f172a;
+  /* Safe area padding for notch phones */
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 @layer components {
   .card {
     @apply bg-white rounded-2xl border border-surface-200/60 shadow-sm;
   }
-  
+
   .card-hover {
-    @apply card transition-all duration-200 hover:shadow-md hover:border-surface-300/60 hover:-translate-y-0.5;
+    @apply card transition-all duration-200 hover:shadow-md hover:border-surface-300/60 active:scale-[0.98];
   }
 
+  /* Bigger tap targets on mobile */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-sm transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-semibold text-sm transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px] select-none;
   }
 
   .btn-primary {
@@ -42,19 +47,20 @@ body {
   }
 
   .btn-secondary {
-    @apply bg-surface-100 text-surface-700 hover:bg-surface-200 border border-surface-200;
+    @apply bg-surface-100 text-surface-700 hover:bg-surface-200 border border-surface-200 active:bg-surface-300;
   }
 
   .btn-danger {
-    @apply bg-red-50 text-red-600 hover:bg-red-100 border border-red-200;
+    @apply bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 active:bg-red-200;
   }
 
   .btn-ghost {
-    @apply text-surface-500 hover:text-surface-700 hover:bg-surface-100;
+    @apply text-surface-500 hover:text-surface-700 hover:bg-surface-100 active:bg-surface-200;
   }
 
+  /* Bigger input for mobile */
   .input {
-    @apply w-full px-4 py-2.5 rounded-xl border border-surface-200 bg-white text-surface-900 text-sm font-medium placeholder:text-surface-400 focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-all duration-200;
+    @apply w-full px-4 py-3 rounded-xl border border-surface-200 bg-white text-surface-900 text-base font-medium placeholder:text-surface-400 focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-all duration-200 min-h-[48px];
   }
 
   .label {
@@ -62,15 +68,15 @@ body {
   }
 
   .badge {
-    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold;
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-bold;
   }
 
   .metric-card {
-    @apply card p-5 relative overflow-hidden;
+    @apply card p-4 sm:p-5 relative overflow-hidden;
   }
 
   .nav-link {
-    @apply flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-surface-500 transition-all duration-200 hover:bg-surface-100 hover:text-surface-900;
+    @apply flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-surface-500 transition-all duration-200 hover:bg-surface-100 hover:text-surface-900 min-h-[48px];
   }
 
   .nav-link-active {
@@ -78,11 +84,17 @@ body {
   }
 
   .modal-overlay {
-    @apply fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4;
+    @apply fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4;
   }
 
   .modal-content {
-    @apply bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto;
+    @apply bg-white w-full sm:rounded-2xl sm:max-w-lg shadow-2xl;
+    /* Slides up from bottom on mobile */
+    border-radius: 20px 20px 0 0;
+    max-height: 92dvh;
+    overflow-y: auto;
+    /* Safe area bottom for notch phones */
+    padding-bottom: env(safe-area-inset-bottom);
   }
 
   .progress-bar {
@@ -98,24 +110,88 @@ body {
   }
 
   .toast {
-    @apply fixed bottom-6 right-6 z-[100] bg-surface-900 text-white px-5 py-3 rounded-xl shadow-2xl text-sm font-medium flex items-center gap-2 animate-slide-up;
+    @apply fixed z-[100] bg-surface-900 text-white px-5 py-3 rounded-xl shadow-2xl text-sm font-medium flex items-center gap-2 animate-slide-up;
+    bottom: calc(1.5rem + env(safe-area-inset-bottom));
+    right: 1rem;
+    left: 1rem;
+    max-width: 400px;
+    margin: 0 auto;
+  }
+
+  @media (min-width: 640px) {
+    .toast {
+      left: auto;
+      right: 1.5rem;
+    }
+  }
+
+  /* Bottom navigation bar (mobile only) */
+  .bottom-nav {
+    @apply fixed bottom-0 left-0 right-0 bg-white border-t border-surface-200 z-30 flex lg:hidden;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .bottom-nav-item {
+    @apply flex-1 flex flex-col items-center justify-center py-2 gap-0.5 text-surface-400 transition-colors active:bg-surface-50;
+    min-height: 56px;
+  }
+
+  .bottom-nav-item.active {
+    @apply text-brand-600;
   }
 }
 
 /* Animations */
-@keyframes shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
+@keyframes fadeIn {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
 }
 
+@keyframes slideUp {
+  0% { opacity: 0; transform: translateY(20px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideInRight {
+  0% { opacity: 0; transform: translateX(20px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+
+/* Modal slide up from bottom on mobile */
+@keyframes modalSlideUp {
+  0% { transform: translateY(100%); }
+  100% { transform: translateY(0); }
+}
+
+.animate-fade-in { animation: fadeIn 0.5s ease-out; }
+.animate-slide-up { animation: slideUp 0.4s ease-out; }
+.animate-slide-in-right { animation: slideInRight 0.3s ease-out; }
+.animate-modal-up { animation: modalSlideUp 0.3s ease-out; }
+
+/* Shimmer */
 .animate-shimmer {
   background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.4) 50%, transparent 100%);
   background-size: 200% 100%;
   animation: shimmer 2s infinite;
 }
 
-/* Custom scrollbar for webkit */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* Custom scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* Remove tap highlight on mobile */
+* { -webkit-tap-highlight-color: transparent; }
+
+/* Prevent zoom on input focus (iOS) */
+@media (max-width: 640px) {
+  .input, select, textarea {
+    font-size: 16px !important;
+  }
+}
