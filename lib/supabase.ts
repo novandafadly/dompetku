@@ -155,3 +155,14 @@ export type SavingsGoal = {
   updated_at: string
   wallets?: Wallet
 }
+
+export type NetWorthSnapshot = {
+  id: string
+  user_id: string
+  snapshot_date: string
+  total_balance: number
+  total_assets: number
+  total_debt: number
+  net_worth: number
+  created_at: string
+}
