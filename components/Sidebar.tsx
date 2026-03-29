@@ -15,6 +15,7 @@ const NAV_ITEMS = [
   { href: '/credit-cards', label: 'Kartu Kredit',    icon: '💎' },
   { href: '/debts',        label: 'Utang/Piutang',   icon: '🤝' },
   { href: '/categories',   label: 'Kategori',        icon: '🏷️' },
+  { href: '/reports',      label: 'Laporan',         icon: '📈' },
 ]
 
 export default function Sidebar({ userName }: { userName?: string }) {
@@ -45,7 +46,7 @@ export default function Sidebar({ userName }: { userName?: string }) {
         'lg:translate-x-0',
         mobileOpen ? 'translate-x-0' : '-translate-x-full'
       )}>
-        <div className="px-6 py-6 border-b border-surface-100">
+        <div className="px-6 py-5 border-b border-surface-100">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-brand-600 rounded-xl flex items-center justify-center shadow-sm">
               <span className="text-xl">💰</span>
@@ -57,7 +58,7 @@ export default function Sidebar({ userName }: { userName?: string }) {
           </div>
         </div>
 
-        <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
+        <nav className="flex-1 px-3 py-3 space-y-0.5 overflow-y-auto">
           {NAV_ITEMS.map((item) => (
             <button
               key={item.href}
