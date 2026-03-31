@@ -109,9 +109,20 @@ export type CreditCard = {
   color: string | null
 }
 
+export type Contact = {
+  id: string
+  user_id: string
+  name: string
+  phone: string | null
+  note: string | null
+  avatar_color: string
+  created_at: string
+}
+
 export type Debt = {
   id: string
   user_id: string
+  contact_id: string | null
   type: 'debt' | 'receivable'
   person_name: string
   total_amount: number
@@ -119,6 +130,7 @@ export type Debt = {
   description: string | null
   due_date: string | null
   is_completed: boolean
+  contacts?: Contact
 }
 
 export type RecurringTransaction = {
