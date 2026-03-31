@@ -41,20 +41,6 @@ export default function TransactionsPage() {
     setCategories(c.data || [])
   }
 
-  // ── Helper: ambil saldo wallet fresh dari DB ──────────────
-  async function getFreshWallet(walletId: string): Promise<Wallet | null> {
-    const { data } = await supabase.from('wallets').select('*').eq('id', walletId).single()
-    return data || null
-  }
-
-  // ── Helper: adjust balance wallet ────────────────────────
-  // delta positif = tambah, negatif = kurangi
-  async function adjustBalance(walletId: string, delta: number) {
-    const wallet = await getFreshWallet(walletId)
-    if (!wallet) return
-    await supabase.from('wallets').update({ balance: Number(wallet.balance) + delta }).eq('id', walletId)
-  }
-
   function isInvestmentCategory(catId: string): boolean {
     const cat = categories.find(c => c.id === catId)
     if (!cat) return false
@@ -90,41 +76,37 @@ export default function TransactionsPage() {
     const isInvest = form.type === 'expense' && form.category_id && isInvestmentCategory(form.category_id)
 
     if (editing) {
-      // Cek apakah ini transaksi dari debt — kalau iya, skip wallet adjustment
-      // karena sudah dihandle di debt page
-      const isDebtTx = !!(editing as any).debt_id
+      // Trigger DB hanya handle INSERT dan DELETE, tidak handle UPDATE.
+      // Jadi untuk edit: DELETE dulu (trigger reverse balance lama),
+      // lalu INSERT baru (trigger apply balance baru).
+      const { error: delError } = await supabase.from('transactions').delete().eq('id', editing.id)
+      if (delError) { toast(delError.message, '❌'); return }
 
-      if (!isDebtTx) {
-        // 1. Reverse balance wallet LAMA
-        //    income lama → kurangi, expense lama → tambah
-        const oldDelta = editing.type === 'income' ? -Number(editing.amount) : Number(editing.amount)
-        await adjustBalance(editing.wallet_id, oldDelta)
-
-        // 2. Apply balance wallet BARU
-        //    income baru → tambah, expense baru → kurangi
-        const newDelta = form.type === 'income' ? amount : -amount
-        await adjustBalance(form.wallet_id, newDelta)
-      }
-
-      const { error } = await supabase.from('transactions').update({
-        wallet_id: form.wallet_id, category_id: form.category_id || null,
-        type: form.type, amount, description: form.description || null, date: form.date
-      }).eq('id', editing.id)
-      if (error) { toast(error.message, '❌'); return }
+      const { error: insError } = await supabase.from('transactions').insert({
+        user_id: session.user.id,
+        wallet_id: form.wallet_id,
+        category_id: form.category_id || null,
+        type: form.type,
+        amount,
+        description: form.description || null,
+        date: form.date,
+        // Pertahankan debt_id kalau ada
+        ...(((editing as any).debt_id) ? { debt_id: (editing as any).debt_id } : {}),
+      })
+      if (insError) { toast(insError.message, '❌'); return }
       toast('Transaksi diperbarui!', '✅')
     } else {
-      // ADD — insert transaksi dan adjust balance
+      // ADD — trigger otomatis adjust balance saat INSERT
       const { error } = await supabase.from('transactions').insert({
-        user_id: session.user.id, wallet_id: form.wallet_id,
-        category_id: form.category_id || null, type: form.type,
-        amount, description: form.description || null, date: form.date,
+        user_id: session.user.id,
+        wallet_id: form.wallet_id,
+        category_id: form.category_id || null,
+        type: form.type,
+        amount,
+        description: form.description || null,
+        date: form.date,
       })
       if (error) { toast(error.message, '❌'); return }
-
-      // Adjust wallet balance
-      const delta = form.type === 'income' ? amount : -amount
-      await adjustBalance(form.wallet_id, delta)
-
       toast(form.type === 'income' ? 'Pemasukan ditambahkan! 💰' : 'Pengeluaran ditambahkan! 💸')
       if (isInvest) await handleInvestmentAutoLink(session, amount, form.description, form.date)
     }
@@ -133,18 +115,7 @@ export default function TransactionsPage() {
 
   async function deleteTx(id: string) {
     if (!confirm('Hapus transaksi ini?')) return
-
-    // Ambil data transaksi yang akan dihapus
-    const tx = transactions.find(t => t.id === id)
-    if (tx) {
-      const isDebtTx = !!(tx as any).debt_id
-      if (!isDebtTx) {
-        // Reverse balance: income → kurangi, expense → tambah
-        const delta = tx.type === 'income' ? -Number(tx.amount) : Number(tx.amount)
-        await adjustBalance(tx.wallet_id, delta)
-      }
-    }
-
+    // Trigger DB otomatis reverse balance saat DELETE
     await supabase.from('transactions').delete().eq('id', id)
     toast('Transaksi dihapus', '🗑️'); load()
   }
@@ -239,7 +210,6 @@ export default function TransactionsPage() {
                   <p className="text-sm font-semibold text-surface-800 truncate">{tx.description || tx.categories?.name || 'Transaksi'}</p>
                   <p className="text-[10px] text-surface-400 truncate">
                     {formatDate(tx.date)} · {tx.wallets?.name}
-                    {/* Tampilkan badge kalau ini transaksi dari debt */}
                     {(tx as any).debt_id && <span className="ml-1 bg-surface-100 text-surface-500 px-1.5 rounded text-[9px]">🤝 Utang/Piutang</span>}
                   </p>
                 </div>
@@ -260,11 +230,10 @@ export default function TransactionsPage() {
       {/* Add/Edit Modal */}
       <Modal open={showAdd} onClose={() => { setShowAdd(false); setEditing(null) }} title={editing ? 'Edit Transaksi' : 'Tambah Transaksi'}>
         <div className="space-y-4">
-          {/* Warning kalau transaksi dari debt */}
           {editing && (editing as any).debt_id && (
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex gap-2">
               <span>⚠️</span>
-              <span>Transaksi ini terhubung ke catatan utang/piutang. Perubahan wallet tidak akan mempengaruhi saldo — ubah langsung dari halaman Utang & Piutang.</span>
+              <span>Transaksi ini terhubung ke catatan utang/piutang. Sebaiknya ubah langsung dari halaman Utang & Piutang.</span>
             </div>
           )}
           <div>
