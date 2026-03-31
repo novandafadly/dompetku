@@ -57,19 +57,6 @@ export default function WalletsPage() {
     setGoals(g.data || [])
   }
 
-  // ── Helper: ambil saldo wallet fresh dari DB ──────────────
-  async function getFreshWallet(walletId: string): Promise<Wallet | null> {
-    const { data } = await supabase.from('wallets').select('*').eq('id', walletId).single()
-    return data || null
-  }
-
-  // ── Helper: adjust balance wallet ────────────────────────
-  async function adjustBalance(walletId: string, delta: number) {
-    const wallet = await getFreshWallet(walletId)
-    if (!wallet) return
-    await supabase.from('wallets').update({ balance: Number(wallet.balance) + delta }).eq('id', walletId)
-  }
-
   // ── Wallet CRUD ──────────────────────────────────────────
   function openAddWallet() { setEditingWallet(null); setForm(emptyWalletForm); setShowWalletModal(true) }
   function openEditWallet(w: Wallet) {
@@ -88,6 +75,7 @@ export default function WalletsPage() {
       icon: WALLET_ICONS[form.type], color: WALLET_COLORS[form.type],
     }
     if (editingWallet) {
+      // Update langsung — balance diset manual, tidak lewat trigger
       const { error } = await supabase.from('wallets').update(payload).eq('id', editingWallet.id)
       if (error) { toast(error.message, '❌'); return }
       toast('Dompet diperbarui!', '✅')
@@ -106,6 +94,10 @@ export default function WalletsPage() {
   }
 
   // ── Transfer CRUD ─────────────────────────────────────────
+  // Trigger DB handle balance otomatis:
+  // INSERT → kurangi from, tambah to
+  // DELETE → tambah from, kurangi to
+  // Untuk EDIT: DELETE lama + INSERT baru supaya trigger jalan dua kali dengan benar
   function openAddTransfer() { setEditingTransfer(null); setTForm(emptyTForm); setShowTransferModal(true) }
   function openEditTransfer(t: Transfer) {
     setEditingTransfer(t)
@@ -121,44 +113,32 @@ export default function WalletsPage() {
     if (!amount || amount <= 0) { toast('Jumlah tidak valid!', '⚠️'); return }
 
     if (editingTransfer) {
-      // 1. Reverse transfer LAMA:
-      //    kembalikan ke from_wallet lama, kurangi dari to_wallet lama
-      await adjustBalance(editingTransfer.from_wallet_id, Number(editingTransfer.amount))
-      await adjustBalance(editingTransfer.to_wallet_id, -Number(editingTransfer.amount))
+      // DELETE dulu → trigger reverse balance lama
+      const { error: delError } = await supabase.from('transfers').delete().eq('id', editingTransfer.id)
+      if (delError) { toast(delError.message, '❌'); return }
 
-      // 2. Cek saldo cukup di from_wallet BARU (setelah reverse)
-      const newFrom = await getFreshWallet(tForm.from_wallet_id)
-      if (newFrom && Number(newFrom.balance) < amount) {
-        // Kalau tidak cukup, rollback reverse dan batalkan
-        await adjustBalance(editingTransfer.from_wallet_id, -Number(editingTransfer.amount))
-        await adjustBalance(editingTransfer.to_wallet_id, Number(editingTransfer.amount))
-        toast('Saldo tidak mencukupi!', '⚠️'); return
-      }
-
-      // 3. Apply transfer BARU
-      await adjustBalance(tForm.from_wallet_id, -amount)
-      await adjustBalance(tForm.to_wallet_id, amount)
-
-      const { error } = await supabase.from('transfers').update({
-        from_wallet_id: tForm.from_wallet_id, to_wallet_id: tForm.to_wallet_id,
-        amount, note: tForm.note || null, date: tForm.date,
-      }).eq('id', editingTransfer.id)
-      if (error) { toast(error.message, '❌'); return }
+      // INSERT baru → trigger apply balance baru
+      const { error: insError } = await supabase.from('transfers').insert({
+        user_id: session.user.id,
+        from_wallet_id: tForm.from_wallet_id,
+        to_wallet_id: tForm.to_wallet_id,
+        amount,
+        note: tForm.note || null,
+        date: tForm.date,
+      })
+      if (insError) { toast(insError.message, '❌'); return }
       toast('Transfer diperbarui!', '✅')
     } else {
-      // ADD — cek saldo dulu
-      const from = await getFreshWallet(tForm.from_wallet_id)
-      if (from && Number(from.balance) < amount) { toast('Saldo tidak mencukupi!', '⚠️'); return }
-
+      // INSERT → trigger otomatis kurangi from, tambah to
       const { error } = await supabase.from('transfers').insert({
-        user_id: session.user.id, from_wallet_id: tForm.from_wallet_id,
-        to_wallet_id: tForm.to_wallet_id, amount, note: tForm.note || null, date: tForm.date,
+        user_id: session.user.id,
+        from_wallet_id: tForm.from_wallet_id,
+        to_wallet_id: tForm.to_wallet_id,
+        amount,
+        note: tForm.note || null,
+        date: tForm.date,
       })
       if (error) { toast(error.message, '❌'); return }
-
-      // Adjust balance: kurangi from, tambah to
-      await adjustBalance(tForm.from_wallet_id, -amount)
-      await adjustBalance(tForm.to_wallet_id, amount)
       toast('Transfer berhasil!', '⇄')
     }
     setShowTransferModal(false); setEditingTransfer(null); setTForm(emptyTForm); load()
@@ -166,14 +146,7 @@ export default function WalletsPage() {
 
   async function deleteTransfer(id: string) {
     if (!confirm('Hapus transfer ini?')) return
-
-    // Reverse balance: kembalikan ke from, kurangi dari to
-    const transfer = transfers.find(t => t.id === id)
-    if (transfer) {
-      await adjustBalance(transfer.from_wallet_id, Number(transfer.amount))
-      await adjustBalance(transfer.to_wallet_id, -Number(transfer.amount))
-    }
-
+    // Trigger DB otomatis reverse balance saat DELETE
     await supabase.from('transfers').delete().eq('id', id)
     toast('Transfer dihapus', '🗑️'); load()
   }
@@ -347,9 +320,7 @@ export default function WalletsPage() {
               <h2 className={`text-sm font-bold uppercase tracking-wider ${meta.color}`}>{meta.label}</h2>
               <div className={`h-px flex-1 ${pocket === 'operasional' ? 'bg-blue-100' : pocket === 'tabungan' ? 'bg-green-100' : 'bg-purple-100'}`} />
               {isTabungan && (
-                <button onClick={() => openAddGoal()} className="btn text-xs py-1.5 px-3 bg-green-50 text-green-700 border border-green-200 hover:bg-green-100">
-                  + Goal
-                </button>
+                <button onClick={() => openAddGoal()} className="btn text-xs py-1.5 px-3 bg-green-50 text-green-700 border border-green-200 hover:bg-green-100">+ Goal</button>
               )}
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
