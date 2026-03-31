@@ -36,6 +36,7 @@ export type Transaction = {
   user_id: string
   wallet_id: string
   category_id: string | null
+  debt_id: string | null   // referensi ke debt, untuk reverse balance saat delete
   type: 'income' | 'expense'
   amount: number
   description: string | null
