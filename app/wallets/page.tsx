@@ -1,5 +1,4 @@
 'use client'
-
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { Wallet, Transfer, Pocket, SavingsGoal } from '@/lib/supabase'
@@ -25,7 +24,6 @@ function daysUntil(dateStr: string): number {
   const d = new Date(dateStr); d.setHours(0,0,0,0)
   return Math.ceil((d.getTime() - today.getTime()) / 86400000)
 }
-
 function monthsUntil(dateStr: string): number {
   const today = new Date()
   const d = new Date(dateStr)
@@ -36,15 +34,12 @@ export default function WalletsPage() {
   const [wallets, setWallets] = useState<Wallet[]>([])
   const [transfers, setTransfers] = useState<Transfer[]>([])
   const [goals, setGoals] = useState<SavingsGoal[]>([])
-
   const [showWalletModal, setShowWalletModal] = useState(false)
   const [showTransferModal, setShowTransferModal] = useState(false)
   const [showGoalModal, setShowGoalModal] = useState(false)
-
   const [editingWallet, setEditingWallet] = useState<Wallet | null>(null)
   const [editingTransfer, setEditingTransfer] = useState<Transfer | null>(null)
   const [editingGoal, setEditingGoal] = useState<SavingsGoal | null>(null)
-
   const [form, setForm] = useState<WalletForm>(emptyWalletForm)
   const [tForm, setTForm] = useState<TransferForm>(emptyTForm)
   const [gForm, setGForm] = useState<GoalForm>(emptyGoalForm)
@@ -62,6 +57,19 @@ export default function WalletsPage() {
     setGoals(g.data || [])
   }
 
+  // ── Helper: ambil saldo wallet fresh dari DB ──────────────
+  async function getFreshWallet(walletId: string): Promise<Wallet | null> {
+    const { data } = await supabase.from('wallets').select('*').eq('id', walletId).single()
+    return data || null
+  }
+
+  // ── Helper: adjust balance wallet ────────────────────────
+  async function adjustBalance(walletId: string, delta: number) {
+    const wallet = await getFreshWallet(walletId)
+    if (!wallet) return
+    await supabase.from('wallets').update({ balance: Number(wallet.balance) + delta }).eq('id', walletId)
+  }
+
   // ── Wallet CRUD ──────────────────────────────────────────
   function openAddWallet() { setEditingWallet(null); setForm(emptyWalletForm); setShowWalletModal(true) }
   function openEditWallet(w: Wallet) {
@@ -74,7 +82,11 @@ export default function WalletsPage() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
     if (!form.name) { toast('Nama dompet wajib diisi!', '⚠️'); return }
-    const payload = { name: form.name, type: form.type, pocket: form.pocket, balance: Number(form.balance) || 0, icon: WALLET_ICONS[form.type], color: WALLET_COLORS[form.type] }
+    const payload = {
+      name: form.name, type: form.type, pocket: form.pocket,
+      balance: Number(form.balance) || 0,
+      icon: WALLET_ICONS[form.type], color: WALLET_COLORS[form.type],
+    }
     if (editingWallet) {
       const { error } = await supabase.from('wallets').update(payload).eq('id', editingWallet.id)
       if (error) { toast(error.message, '❌'); return }
@@ -107,15 +119,46 @@ export default function WalletsPage() {
     if (tForm.from_wallet_id === tForm.to_wallet_id) { toast('Pilih dompet berbeda!', '⚠️'); return }
     const amount = Number(tForm.amount)
     if (!amount || amount <= 0) { toast('Jumlah tidak valid!', '⚠️'); return }
+
     if (editingTransfer) {
-      const { error } = await supabase.from('transfers').update({ from_wallet_id: tForm.from_wallet_id, to_wallet_id: tForm.to_wallet_id, amount, note: tForm.note || null, date: tForm.date }).eq('id', editingTransfer.id)
+      // 1. Reverse transfer LAMA:
+      //    kembalikan ke from_wallet lama, kurangi dari to_wallet lama
+      await adjustBalance(editingTransfer.from_wallet_id, Number(editingTransfer.amount))
+      await adjustBalance(editingTransfer.to_wallet_id, -Number(editingTransfer.amount))
+
+      // 2. Cek saldo cukup di from_wallet BARU (setelah reverse)
+      const newFrom = await getFreshWallet(tForm.from_wallet_id)
+      if (newFrom && Number(newFrom.balance) < amount) {
+        // Kalau tidak cukup, rollback reverse dan batalkan
+        await adjustBalance(editingTransfer.from_wallet_id, -Number(editingTransfer.amount))
+        await adjustBalance(editingTransfer.to_wallet_id, Number(editingTransfer.amount))
+        toast('Saldo tidak mencukupi!', '⚠️'); return
+      }
+
+      // 3. Apply transfer BARU
+      await adjustBalance(tForm.from_wallet_id, -amount)
+      await adjustBalance(tForm.to_wallet_id, amount)
+
+      const { error } = await supabase.from('transfers').update({
+        from_wallet_id: tForm.from_wallet_id, to_wallet_id: tForm.to_wallet_id,
+        amount, note: tForm.note || null, date: tForm.date,
+      }).eq('id', editingTransfer.id)
       if (error) { toast(error.message, '❌'); return }
       toast('Transfer diperbarui!', '✅')
     } else {
-      const from = wallets.find(w => w.id === tForm.from_wallet_id)
+      // ADD — cek saldo dulu
+      const from = await getFreshWallet(tForm.from_wallet_id)
       if (from && Number(from.balance) < amount) { toast('Saldo tidak mencukupi!', '⚠️'); return }
-      const { error } = await supabase.from('transfers').insert({ user_id: session.user.id, from_wallet_id: tForm.from_wallet_id, to_wallet_id: tForm.to_wallet_id, amount, note: tForm.note || null, date: tForm.date })
+
+      const { error } = await supabase.from('transfers').insert({
+        user_id: session.user.id, from_wallet_id: tForm.from_wallet_id,
+        to_wallet_id: tForm.to_wallet_id, amount, note: tForm.note || null, date: tForm.date,
+      })
       if (error) { toast(error.message, '❌'); return }
+
+      // Adjust balance: kurangi from, tambah to
+      await adjustBalance(tForm.from_wallet_id, -amount)
+      await adjustBalance(tForm.to_wallet_id, amount)
       toast('Transfer berhasil!', '⇄')
     }
     setShowTransferModal(false); setEditingTransfer(null); setTForm(emptyTForm); load()
@@ -123,6 +166,14 @@ export default function WalletsPage() {
 
   async function deleteTransfer(id: string) {
     if (!confirm('Hapus transfer ini?')) return
+
+    // Reverse balance: kembalikan ke from, kurangi dari to
+    const transfer = transfers.find(t => t.id === id)
+    if (transfer) {
+      await adjustBalance(transfer.from_wallet_id, Number(transfer.amount))
+      await adjustBalance(transfer.to_wallet_id, -Number(transfer.amount))
+    }
+
     await supabase.from('transfers').delete().eq('id', id)
     toast('Transfer dihapus', '🗑️'); load()
   }
@@ -133,13 +184,11 @@ export default function WalletsPage() {
     setGForm({ ...emptyGoalForm, wallet_id: walletId || '' })
     setShowGoalModal(true)
   }
-
   function openEditGoal(g: SavingsGoal) {
     setEditingGoal(g)
     setGForm({ wallet_id: g.wallet_id, name: g.name, target_amount: String(g.target_amount), target_date: g.target_date || '', icon: g.icon, color: g.color })
     setShowGoalModal(true)
   }
-
   async function saveGoal() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
@@ -156,13 +205,11 @@ export default function WalletsPage() {
     }
     setShowGoalModal(false); setEditingGoal(null); setGForm(emptyGoalForm); load()
   }
-
   async function deleteGoal(id: string) {
     if (!confirm('Hapus goal ini?')) return
     await supabase.from('savings_goals').delete().eq('id', id)
     toast('Goal dihapus', '🗑️'); load()
   }
-
   async function toggleGoalComplete(g: SavingsGoal) {
     await supabase.from('savings_goals').update({ is_completed: !g.is_completed }).eq('id', g.id)
     toast(!g.is_completed ? '🎉 Goal tercapai!' : 'Goal dibuka kembali', !g.is_completed ? '🎉' : '🔄')
@@ -188,12 +235,9 @@ export default function WalletsPage() {
     const months = goal.target_date ? monthsUntil(goal.target_date) : null
     const monthlyNeeded = months && months > 0 ? remaining / months : null
     const isAchieved = current >= target
-
     return (
       <div className={`card p-5 group relative overflow-hidden ${goal.is_completed ? 'opacity-60' : ''}`}>
-        {/* color accent */}
         <div className="absolute top-0 left-0 w-1 h-full rounded-l-2xl" style={{ background: goal.color }} />
-
         <div className="flex items-start justify-between mb-3 pl-2">
           <div className="flex items-center gap-2">
             <span className="text-2xl">{goal.icon}</span>
@@ -212,8 +256,6 @@ export default function WalletsPage() {
             <button onClick={() => deleteGoal(goal.id)} className="w-7 h-7 rounded-lg hover:bg-red-50 text-surface-400 hover:text-red-500 flex items-center justify-center text-xs">✕</button>
           </div>
         </div>
-
-        {/* Progress bar */}
         <div className="pl-2">
           <div className="flex justify-between items-end mb-1">
             <span className="text-xs text-surface-500">Terkumpul</span>
@@ -227,8 +269,6 @@ export default function WalletsPage() {
             <span className="font-mono">{formatShort(target)}</span>
           </div>
         </div>
-
-        {/* Stats */}
         {!goal.is_completed && (
           <div className="mt-3 pt-3 border-t border-surface-100 pl-2 grid grid-cols-2 gap-2">
             <div>
@@ -251,7 +291,6 @@ export default function WalletsPage() {
             )}
           </div>
         )}
-
         {(goal.is_completed || isAchieved) && (
           <div className="mt-3 pt-3 border-t border-surface-100 pl-2">
             <p className="text-sm font-bold text-green-600">🎉 Goal tercapai!</p>
@@ -301,10 +340,8 @@ export default function WalletsPage() {
         const meta = POCKET_META[pocket]
         const isTabungan = pocket === 'tabungan'
         const pocketGoals = goals.filter(g => pWallets.some(w => w.id === g.wallet_id))
-
         return (
           <div key={pocket} className="mb-10">
-            {/* Section header */}
             <div className="flex items-center gap-2 mb-3">
               <span className="text-lg">{meta.icon}</span>
               <h2 className={`text-sm font-bold uppercase tracking-wider ${meta.color}`}>{meta.label}</h2>
@@ -315,14 +352,11 @@ export default function WalletsPage() {
                 </button>
               )}
             </div>
-
-            {/* Wallet cards */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
               {pWallets.map((w) => {
                 const walletGoals = goals.filter(g => g.wallet_id === w.id && !g.is_completed)
                 const nearestGoal = walletGoals[0]
                 const goalPct = nearestGoal ? Math.min((Number(w.balance) / Number(nearestGoal.target_amount)) * 100, 100) : null
-
                 return (
                   <div key={w.id} className="card-hover p-5 relative overflow-hidden group">
                     <div className="absolute top-0 right-0 w-24 h-24 rounded-full opacity-10" style={{ background: w.color || '#3b82f6', transform: 'translate(30%, -30%)' }} />
@@ -341,8 +375,6 @@ export default function WalletsPage() {
                     <p className="text-sm font-semibold text-surface-800">{w.name}</p>
                     <p className="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-2">{w.type}</p>
                     <p className="text-xl font-extrabold font-mono text-surface-900">{formatCurrency(Number(w.balance))}</p>
-
-                    {/* Mini goal progress on card */}
                     {nearestGoal && goalPct !== null && (
                       <div className="mt-3 pt-3 border-t border-surface-100">
                         <div className="flex justify-between items-center mb-1">
@@ -358,8 +390,6 @@ export default function WalletsPage() {
                 )
               })}
             </div>
-
-            {/* Savings Goals section */}
             {isTabungan && pocketGoals.length > 0 && (
               <div>
                 <p className="text-xs font-bold text-surface-500 uppercase tracking-wider mb-3">🎯 Savings Goals</p>
@@ -369,7 +399,6 @@ export default function WalletsPage() {
                 </div>
               </div>
             )}
-
             {isTabungan && pocketGoals.length === 0 && tabunganWallets.length > 0 && (
               <div className="card p-6 text-center border-dashed border-2 border-green-200 bg-green-50/30">
                 <p className="text-2xl mb-2">🎯</p>
@@ -417,7 +446,6 @@ export default function WalletsPage() {
       )}
 
       {/* ── Modals ── */}
-
       {/* Wallet Modal */}
       <Modal open={showWalletModal} onClose={() => { setShowWalletModal(false); setEditingWallet(null) }} title={editingWallet ? 'Edit Dompet' : 'Tambah Dompet'}>
         <div className="space-y-4">
@@ -453,6 +481,9 @@ export default function WalletsPage() {
           <div>
             <label className="label">{editingWallet ? 'Saldo Saat Ini' : 'Saldo Awal'}</label>
             <input className="input" type="number" placeholder="0" value={form.balance} onChange={(e) => setForm({ ...form, balance: e.target.value })} />
+            {editingWallet && (
+              <p className="text-[11px] text-amber-600 mt-1">⚠️ Mengubah saldo langsung akan menimpa saldo saat ini tanpa mencatat transaksi.</p>
+            )}
           </div>
           <div className="flex gap-2">
             {editingWallet && <button onClick={() => { deleteWallet(editingWallet.id); setShowWalletModal(false) }} className="btn btn-danger flex-1">Hapus</button>}
@@ -464,7 +495,12 @@ export default function WalletsPage() {
       {/* Transfer Modal */}
       <Modal open={showTransferModal} onClose={() => { setShowTransferModal(false); setEditingTransfer(null) }} title={editingTransfer ? 'Edit Transfer' : 'Transfer Antar Dompet'}>
         <div className="space-y-4">
-          {editingTransfer && <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex gap-2"><span>⚠️</span><span>Saldo dompet disesuaikan otomatis oleh sistem.</span></div>}
+          {editingTransfer && (
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800 flex gap-2">
+              <span>ℹ️</span>
+              <span>Saldo dompet lama akan dikembalikan otomatis, lalu saldo dompet baru disesuaikan.</span>
+            </div>
+          )}
           <div>
             <label className="label">Dari</label>
             <select className="input" value={tForm.from_wallet_id} onChange={(e) => setTForm({ ...tForm, from_wallet_id: e.target.value })}>
@@ -552,8 +588,6 @@ export default function WalletsPage() {
               ))}
             </div>
           </div>
-
-          {/* Preview */}
           {gForm.name && gForm.target_amount && (
             <div className="p-3 rounded-xl border-l-4 bg-surface-50" style={{ borderColor: gForm.color }}>
               <div className="flex items-center gap-2 mb-2">
@@ -570,7 +604,6 @@ export default function WalletsPage() {
               <p className="text-[10px] text-surface-400 mt-1">Target: {formatShort(Number(gForm.target_amount))}</p>
             </div>
           )}
-
           <div className="flex gap-2">
             {editingGoal && <button onClick={() => { deleteGoal(editingGoal.id); setShowGoalModal(false) }} className="btn btn-danger flex-1">Hapus</button>}
             <button onClick={saveGoal} className="btn btn-primary flex-1">{editingGoal ? 'Simpan' : 'Buat Goal'}</button>
