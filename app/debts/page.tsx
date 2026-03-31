@@ -56,7 +56,6 @@ const emptyContactForm: ContactForm = {
   name: '', phone: '', note: '', avatar_color: AVATAR_COLORS[0],
 }
 
-// ─── Per-contact net position ─────────────────────────────
 type ContactSummary = {
   contact: Contact
   debts: Debt[]
@@ -64,6 +63,36 @@ type ContactSummary = {
   totalDebt: number
   totalReceivable: number
   net: number
+}
+
+// ─── Helper: adjust wallet balance ────────────────────────
+// delta positif = tambah saldo, negatif = kurangi saldo
+async function adjustWalletBalance(walletId: string, delta: number, wallets: Wallet[]) {
+  const wallet = wallets.find(w => w.id === walletId)
+  if (!wallet) return
+  await supabase.from('wallets')
+    .update({ balance: wallet.balance + delta })
+    .eq('id', walletId)
+}
+
+// ─── Helper: reverse semua transaksi debt yang ada ────────
+// Dipakai sebelum edit, supaya balance wallet lama dikembalikan dulu
+async function reverseDebtTransactions(debtId: string, wallets: Wallet[]) {
+  const { data: txns } = await supabase
+    .from('transactions')
+    .select('*')
+    .eq('debt_id', debtId)
+
+  if (!txns || txns.length === 0) return
+
+  for (const txn of txns) {
+    // Reverse: income → kurangi, expense → tambah
+    const reverseDelta = txn.type === 'income' ? -Number(txn.amount) : Number(txn.amount)
+    await adjustWalletBalance(txn.wallet_id, reverseDelta, wallets)
+  }
+
+  // Hapus semua transaksi terkait debt ini
+  await supabase.from('transactions').delete().eq('debt_id', debtId)
 }
 
 export default function DebtsPage() {
@@ -175,15 +204,13 @@ export default function DebtsPage() {
     const total = Number(debtForm.total_amount)
     if (!total) { toast('Jumlah wajib diisi!', '⚠️'); return }
 
-    // Create new contact on the fly if name typed
     let contactId = debtForm.contact_id
     let personName = contacts.find(c => c.id === contactId)?.name || debtForm.new_contact_name
 
     if (!contactId && debtForm.new_contact_name.trim()) {
       const color = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)]
       const { data, error } = await supabase.from('contacts').insert({
-        user_id: session.user.id, name: debtForm.new_contact_name.trim(),
-        avatar_color: color,
+        user_id: session.user.id, name: debtForm.new_contact_name.trim(), avatar_color: color,
       }).select().single()
       if (error) { toast(error.message, '❌'); return }
       contactId = data.id
@@ -204,28 +231,67 @@ export default function DebtsPage() {
     }
 
     if (editingDebt) {
+      // ── EDIT MODE ──
+      // Perlu load wallets fresh sebelum reverse, karena state mungkin stale
+      const { data: freshWallets } = await supabase.from('wallets').select('*').eq('is_active', true)
+      const allWallets = freshWallets || wallets
+
+      // 1. Reverse semua transaksi lama terkait debt ini (kembalikan saldo wallet lama)
+      await reverseDebtTransactions(editingDebt.id, allWallets)
+
+      // 2. Update data debt
       const { error } = await supabase.from('debts').update(payload).eq('id', editingDebt.id)
       if (error) { toast(error.message, '❌'); return }
+
+      // 3. Buat transaksi baru dengan wallet baru (jika ada wallet dipilih)
+      if (debtForm.wallet_id) {
+        const freshWallet = allWallets.find(w => w.id === debtForm.wallet_id)
+        if (freshWallet) {
+          const delta = debtForm.type === 'receivable' ? -total : total
+          await supabase.from('wallets')
+            .update({ balance: freshWallet.balance + delta })
+            .eq('id', freshWallet.id)
+
+          await supabase.from('transactions').insert({
+            user_id: session.user.id,
+            wallet_id: debtForm.wallet_id,
+            debt_id: editingDebt.id,
+            type: debtForm.type === 'receivable' ? 'expense' : 'income',
+            amount: total,
+            description: debtForm.type === 'receivable'
+              ? `[Piutang] ${personName}${debtForm.description ? ' - ' + debtForm.description : ''}`
+              : `[Hutang] ${personName}${debtForm.description ? ' - ' + debtForm.description : ''}`,
+            date: new Date().toISOString().split('T')[0],
+            category_id: null,
+          })
+        }
+      }
+
       toast('Diperbarui!', '✅')
     } else {
-      const { error } = await supabase.from('debts').insert({ ...payload, user_id: session.user.id, is_completed: false })
+      // ── ADD MODE ──
+      const { data: newDebt, error } = await supabase
+        .from('debts')
+        .insert({ ...payload, user_id: session.user.id, is_completed: false })
+        .select()
+        .single()
       if (error) { toast(error.message, '❌'); return }
 
-      // Adjust wallet balance saat catat baru
-      if (debtForm.wallet_id) {
-        const wallet = wallets.find(w => w.id === debtForm.wallet_id)
+      // Adjust wallet balance dan catat transaksi
+      if (debtForm.wallet_id && newDebt) {
+        const { data: freshWallets } = await supabase.from('wallets').select('*').eq('is_active', true)
+        const allWallets = freshWallets || wallets
+        const wallet = allWallets.find(w => w.id === debtForm.wallet_id)
         if (wallet) {
-          // Piutang = kamu bayarin dulu → saldo berkurang
-          // Hutang = kamu terima uang → saldo bertambah
           const delta = debtForm.type === 'receivable' ? -total : total
           await supabase.from('wallets')
             .update({ balance: wallet.balance + delta })
             .eq('id', wallet.id)
 
-          // Catat otomatis di riwayat transaksi
           await supabase.from('transactions').insert({
             user_id: session.user.id,
             wallet_id: debtForm.wallet_id,
+            debt_id: newDebt.id,
             type: debtForm.type === 'receivable' ? 'expense' : 'income',
             amount: total,
             description: debtForm.type === 'receivable'
@@ -245,6 +311,11 @@ export default function DebtsPage() {
   async function deleteDebt(id: string, e?: React.MouseEvent) {
     e?.stopPropagation()
     if (!confirm('Hapus catatan ini?')) return
+
+    // Reverse semua transaksi terkait sebelum hapus debt
+    const { data: freshWallets } = await supabase.from('wallets').select('*').eq('is_active', true)
+    await reverseDebtTransactions(id, freshWallets || wallets)
+
     await supabase.from('debts').delete().eq('id', id)
     toast('Dihapus', '🗑️'); load()
   }
@@ -279,19 +350,20 @@ export default function DebtsPage() {
 
     // Adjust wallet balance saat catat bayar
     if (payWalletId) {
-      const wallet = wallets.find(w => w.id === payWalletId)
+      const { data: freshWallets } = await supabase.from('wallets').select('*').eq('is_active', true)
+      const allWallets = freshWallets || wallets
+      const wallet = allWallets.find(w => w.id === payWalletId)
       if (wallet) {
-        // Bayar hutang = uang keluar dari wallet
-        // Terima piutang = uang masuk ke wallet
+        // Bayar hutang = uang keluar, terima piutang = uang masuk
         const delta = payingDebt.type === 'debt' ? -amount : amount
         await supabase.from('wallets')
           .update({ balance: wallet.balance + delta })
           .eq('id', wallet.id)
 
-        // Catat otomatis di riwayat transaksi
         await supabase.from('transactions').insert({
           user_id: session.user.id,
           wallet_id: payWalletId,
+          debt_id: payingDebt.id,
           type: payingDebt.type === 'debt' ? 'expense' : 'income',
           amount,
           description: payingDebt.type === 'debt'
@@ -380,7 +452,6 @@ export default function DebtsPage() {
           </div>
         </div>
 
-        {/* Progress */}
         {Number(d.paid_amount) > 0 && (
           <div className="mb-3">
             <div className="progress-bar mb-1">
@@ -390,7 +461,6 @@ export default function DebtsPage() {
           </div>
         )}
 
-        {/* Actions */}
         {!d.is_completed && (
           <div className="flex gap-2">
             <button onClick={(e) => openPay(d, e)} className="btn btn-secondary text-xs flex-1 py-2">
@@ -722,7 +792,6 @@ export default function DebtsPage() {
             </div>
           </div>
 
-          {/* Contact selector */}
           <div>
             <label className="label">Orang</label>
             {contacts.length > 0 ? (
@@ -758,7 +827,6 @@ export default function DebtsPage() {
               value={debtForm.total_amount} onChange={e => setDebtForm({ ...debtForm, total_amount: e.target.value })} />
           </div>
 
-          {/* Wallet selector */}
           <div>
             <label className="label">Dari/Ke Wallet <span className="text-surface-400 font-normal">(opsional)</span></label>
             <select className="input" value={debtForm.wallet_id}
@@ -768,9 +836,13 @@ export default function DebtsPage() {
                 <option key={w.id} value={w.id}>{w.icon || '💳'} {w.name}</option>
               ))}
             </select>
-            {debtForm.wallet_id && !editingDebt && (
+            {debtForm.wallet_id && (
               <p className={`text-[10px] mt-1.5 font-semibold ${debtForm.type === 'receivable' ? 'text-red-500' : 'text-green-600'}`}>
-                {debtForm.type === 'receivable'
+                {editingDebt
+                  ? debtForm.type === 'receivable'
+                    ? '⚠️ Transaksi lama di-reverse, wallet baru akan berkurang'
+                    : '✅ Transaksi lama di-reverse, wallet baru akan bertambah'
+                  : debtForm.type === 'receivable'
                   ? '⚠️ Saldo wallet akan berkurang (kamu bayarin dulu)'
                   : '✅ Saldo wallet akan bertambah (kamu terima uang)'}
               </p>
@@ -861,7 +933,6 @@ export default function DebtsPage() {
                 value={payAmount} onChange={e => setPayAmount(e.target.value)} autoFocus />
             </div>
 
-            {/* Quick fill buttons */}
             <div className="flex gap-2">
               {[25, 50, 100].map(pct => {
                 const rem = Number(payingDebt.total_amount) - Number(payingDebt.paid_amount)
@@ -875,7 +946,6 @@ export default function DebtsPage() {
               })}
             </div>
 
-            {/* Wallet selector untuk pembayaran */}
             <div>
               <label className="label">Dari Wallet <span className="text-surface-400 font-normal">(opsional)</span></label>
               <select className="input" value={payWalletId} onChange={e => setPayWalletId(e.target.value)}>
