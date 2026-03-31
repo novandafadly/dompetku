@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
-import type { Debt, Contact } from '@/lib/supabase'
+import type { Debt, Contact, Wallet } from '@/lib/supabase'
 import { formatCurrency, formatShort, formatDate } from '@/lib/utils'
 import AppShell from '@/components/AppShell'
 import Modal from '@/components/Modal'
@@ -36,6 +36,7 @@ type DebtForm = {
   paid_amount: string
   description: string
   due_date: string
+  wallet_id: string
 }
 
 type ContactForm = {
@@ -48,6 +49,7 @@ type ContactForm = {
 const emptyDebtForm: DebtForm = {
   contact_id: '', new_contact_name: '', type: 'debt',
   total_amount: '', paid_amount: '0', description: '', due_date: '',
+  wallet_id: '',
 }
 
 const emptyContactForm: ContactForm = {
@@ -57,16 +59,17 @@ const emptyContactForm: ContactForm = {
 // ─── Per-contact net position ─────────────────────────────
 type ContactSummary = {
   contact: Contact
-  debts: Debt[]        // saya hutang ke dia
-  receivables: Debt[]  // dia hutang ke saya
-  totalDebt: number    // sisa hutang saya
-  totalReceivable: number // sisa piutang saya
-  net: number          // positif = mereka masih hutang ke saya, negatif = saya masih hutang
+  debts: Debt[]
+  receivables: Debt[]
+  totalDebt: number
+  totalReceivable: number
+  net: number
 }
 
 export default function DebtsPage() {
   const [debts, setDebts] = useState<Debt[]>([])
   const [contacts, setContacts] = useState<Contact[]>([])
+  const [wallets, setWallets] = useState<Wallet[]>([])
 
   const [showDebtModal, setShowDebtModal] = useState(false)
   const [showContactModal, setShowContactModal] = useState(false)
@@ -78,6 +81,7 @@ export default function DebtsPage() {
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null)
   const [payingDebt, setPayingDebt] = useState<Debt | null>(null)
   const [payAmount, setPayAmount] = useState('')
+  const [payWalletId, setPayWalletId] = useState('')
 
   const [debtForm, setDebtForm] = useState<DebtForm>(emptyDebtForm)
   const [contactForm, setContactForm] = useState<ContactForm>(emptyContactForm)
@@ -87,12 +91,14 @@ export default function DebtsPage() {
   useEffect(() => { load() }, [])
 
   async function load() {
-    const [d, c] = await Promise.all([
-      supabase.from('debts').select('*, contacts(*)').order('is_completed').order('due_date', { nullsFirst: false }),
+    const [d, c, w] = await Promise.all([
+      supabase.from('debts').select('*, contacts(*), wallets(*)').order('is_completed').order('due_date', { nullsFirst: false }),
       supabase.from('contacts').select('*').order('name'),
+      supabase.from('wallets').select('*').eq('is_active', true).order('name'),
     ])
     setDebts(d.data || [])
     setContacts(c.data || [])
+    setWallets(w.data || [])
   }
 
   // ── Contact CRUD ────────────────────────────────────────
@@ -158,6 +164,7 @@ export default function DebtsPage() {
       paid_amount: String(d.paid_amount),
       description: d.description || '',
       due_date: d.due_date || '',
+      wallet_id: d.wallet_id || '',
     })
     setShowDebtModal(true)
   }
@@ -193,6 +200,7 @@ export default function DebtsPage() {
       paid_amount: Number(debtForm.paid_amount) || 0,
       description: debtForm.description || null,
       due_date: debtForm.due_date || null,
+      wallet_id: debtForm.wallet_id || null,
     }
 
     if (editingDebt) {
@@ -202,6 +210,33 @@ export default function DebtsPage() {
     } else {
       const { error } = await supabase.from('debts').insert({ ...payload, user_id: session.user.id, is_completed: false })
       if (error) { toast(error.message, '❌'); return }
+
+      // Adjust wallet balance saat catat baru
+      if (debtForm.wallet_id) {
+        const wallet = wallets.find(w => w.id === debtForm.wallet_id)
+        if (wallet) {
+          // Piutang = kamu bayarin dulu → saldo berkurang
+          // Hutang = kamu terima uang → saldo bertambah
+          const delta = debtForm.type === 'receivable' ? -total : total
+          await supabase.from('wallets')
+            .update({ balance: wallet.balance + delta })
+            .eq('id', wallet.id)
+
+          // Catat otomatis di riwayat transaksi
+          await supabase.from('transactions').insert({
+            user_id: session.user.id,
+            wallet_id: debtForm.wallet_id,
+            type: debtForm.type === 'receivable' ? 'expense' : 'income',
+            amount: total,
+            description: debtForm.type === 'receivable'
+              ? `[Piutang] ${personName}${debtForm.description ? ' - ' + debtForm.description : ''}`
+              : `[Hutang] ${personName}${debtForm.description ? ' - ' + debtForm.description : ''}`,
+            date: new Date().toISOString().split('T')[0],
+            category_id: null,
+          })
+        }
+      }
+
       toast(debtForm.type === 'debt' ? 'Utang dicatat!' : 'Piutang dicatat!', debtForm.type === 'debt' ? '💸' : '💰')
     }
     setShowDebtModal(false); setEditingDebt(null); load()
@@ -226,16 +261,48 @@ export default function DebtsPage() {
     e?.stopPropagation()
     setPayingDebt(d)
     setPayAmount('')
+    setPayWalletId(d.wallet_id || '')
     setShowPayModal(true)
   }
 
   async function submitPay() {
     if (!payingDebt) return
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) return
+
     const amount = Number(payAmount)
     if (!amount || amount <= 0) { toast('Jumlah tidak valid!', '⚠️'); return }
+
     const newPaid = Math.min(Number(payingDebt.paid_amount) + amount, Number(payingDebt.total_amount))
     const isCompleted = newPaid >= Number(payingDebt.total_amount)
     await supabase.from('debts').update({ paid_amount: newPaid, is_completed: isCompleted }).eq('id', payingDebt.id)
+
+    // Adjust wallet balance saat catat bayar
+    if (payWalletId) {
+      const wallet = wallets.find(w => w.id === payWalletId)
+      if (wallet) {
+        // Bayar hutang = uang keluar dari wallet
+        // Terima piutang = uang masuk ke wallet
+        const delta = payingDebt.type === 'debt' ? -amount : amount
+        await supabase.from('wallets')
+          .update({ balance: wallet.balance + delta })
+          .eq('id', wallet.id)
+
+        // Catat otomatis di riwayat transaksi
+        await supabase.from('transactions').insert({
+          user_id: session.user.id,
+          wallet_id: payWalletId,
+          type: payingDebt.type === 'debt' ? 'expense' : 'income',
+          amount,
+          description: payingDebt.type === 'debt'
+            ? `[Bayar Hutang] ${payingDebt.person_name}`
+            : `[Terima Piutang] ${payingDebt.person_name}`,
+          date: new Date().toISOString().split('T')[0],
+          category_id: null,
+        })
+      }
+    }
+
     toast(isCompleted ? '🎉 Lunas!' : `Pembayaran ${formatCurrency(amount)} dicatat!`, isCompleted ? '🎉' : '✅')
     setShowPayModal(false); setPayingDebt(null); load()
   }
@@ -259,7 +326,6 @@ export default function DebtsPage() {
     }).filter(s => s.debts.length + s.receivables.length > 0 || contacts.find(c => c.id === s.contact.id))
   }, [contacts, debts])
 
-  // Ungrouped debts (no contact)
   const ungroupedDebts = debts.filter(d => !d.contact_id && !d.is_completed)
 
   const totalMyDebt = debts.filter(d => d.type === 'debt' && !d.is_completed)
@@ -272,7 +338,6 @@ export default function DebtsPage() {
     c.name.toLowerCase().includes(searchContact.toLowerCase())
   )
 
-  // Selected contact debts for detail modal
   const selectedSummary = selectedContact
     ? contactSummaries.find(s => s.contact.id === selectedContact.id)
     : null
@@ -298,6 +363,11 @@ export default function DebtsPage() {
                 {d.type === 'debt' ? '↑ Hutang' : '↓ Piutang'}
               </span>
               {isOverdue && <span className="badge bg-orange-100 text-orange-700 text-[10px]">Jatuh Tempo</span>}
+              {d.wallets && (
+                <span className="text-[10px] bg-surface-100 text-surface-500 px-2 py-0.5 rounded-lg">
+                  {d.wallets.icon || '💳'} {d.wallets.name}
+                </span>
+              )}
             </div>
             {d.description && <p className="text-sm font-semibold text-surface-800">{d.description}</p>}
             {d.due_date && <p className="text-[10px] text-surface-400">{formatDate(d.due_date)}</p>}
@@ -371,7 +441,6 @@ export default function DebtsPage() {
           </button>
         </div>
 
-        {/* Mini breakdown */}
         {hasDebt && (
           <div className="flex gap-3 mt-3 pt-3 border-t border-surface-100">
             {totalDebt > 0 && (
@@ -458,7 +527,6 @@ export default function DebtsPage() {
             {filteredContacts.map(contact => {
               const summary = contactSummaries.find(s => s.contact.id === contact.id)
               if (!summary) {
-                // Contact with no debts yet
                 return (
                   <div key={contact.id} className="card p-4 flex items-center gap-3 active:scale-[0.98] transition-transform cursor-pointer"
                     onClick={() => { setSelectedContact(contact); setShowContactDetail(true) }}>
@@ -476,7 +544,6 @@ export default function DebtsPage() {
             })}
           </div>
 
-          {/* Ungrouped debts */}
           {ungroupedDebts.length > 0 && (
             <div className="mt-6">
               <p className="text-xs font-bold text-surface-400 uppercase tracking-wider mb-3">📝 Tanpa Kontak</p>
@@ -499,7 +566,6 @@ export default function DebtsPage() {
       {/* ── Tab: All Debts ── */}
       {tab === 'all' && (
         <div>
-          {/* Active debts */}
           {(() => {
             const active = debts.filter(d => !d.is_completed)
             const completed = debts.filter(d => d.is_completed)
@@ -515,7 +581,6 @@ export default function DebtsPage() {
                   <div className="space-y-3 mb-4">
                     {active.map(d => (
                       <div key={d.id}>
-                        {/* Contact chip */}
                         {d.contacts && (
                           <div className="flex items-center gap-2 mb-1.5 px-1">
                             <Avatar name={d.contacts.name} color={d.contacts.avatar_color} size="sm" />
@@ -549,7 +614,6 @@ export default function DebtsPage() {
         title={selectedContact?.name || ''}>
         {selectedContact && selectedSummary && (
           <div>
-            {/* Contact info */}
             <div className="flex items-center gap-4 mb-5 p-4 bg-surface-50 rounded-2xl">
               <Avatar name={selectedContact.name} color={selectedContact.avatar_color} size="lg" />
               <div className="flex-1 min-w-0">
@@ -559,7 +623,6 @@ export default function DebtsPage() {
               </div>
             </div>
 
-            {/* Net position */}
             <div className={`p-4 rounded-2xl border mb-5 ${selectedSummary.net > 0 ? 'bg-green-50 border-green-200' : selectedSummary.net < 0 ? 'bg-red-50 border-red-200' : 'bg-surface-50 border-surface-200'}`}>
               <p className="text-xs font-bold text-surface-500 uppercase mb-1">Posisi Net dengan {selectedContact.name}</p>
               <p className={`text-3xl font-extrabold font-mono ${selectedSummary.net > 0 ? 'text-green-600' : selectedSummary.net < 0 ? 'text-red-500' : 'text-surface-500'}`}>
@@ -574,7 +637,6 @@ export default function DebtsPage() {
               </p>
             </div>
 
-            {/* Breakdown */}
             <div className="grid grid-cols-2 gap-3 mb-5">
               <div className="card p-3">
                 <p className="text-[10px] font-bold text-red-500 uppercase mb-1">Hutang Saya</p>
@@ -588,7 +650,6 @@ export default function DebtsPage() {
               </div>
             </div>
 
-            {/* Add debt/receivable buttons */}
             <div className="flex gap-2 mb-5">
               <button onClick={() => { setShowContactDetail(false); openAddDebt(selectedContact.id, 'debt') }}
                 className="btn flex-1 bg-red-50 text-red-700 border border-red-200 text-sm">
@@ -600,7 +661,6 @@ export default function DebtsPage() {
               </button>
             </div>
 
-            {/* All debts with this contact */}
             {(() => {
               const allContactDebts = debts.filter(d => d.contact_id === selectedContact.id)
               const active = allContactDebts.filter(d => !d.is_completed)
@@ -621,7 +681,6 @@ export default function DebtsPage() {
               )
             })()}
 
-            {/* Delete contact */}
             <button onClick={() => { deleteContact(selectedContact.id); setShowContactDetail(false) }}
               className="btn btn-ghost w-full text-red-400 text-xs mt-4">
               Hapus kontak ini
@@ -698,6 +757,26 @@ export default function DebtsPage() {
             <input className="input text-xl font-bold" type="number" inputMode="numeric" placeholder="0"
               value={debtForm.total_amount} onChange={e => setDebtForm({ ...debtForm, total_amount: e.target.value })} />
           </div>
+
+          {/* Wallet selector */}
+          <div>
+            <label className="label">Dari/Ke Wallet <span className="text-surface-400 font-normal">(opsional)</span></label>
+            <select className="input" value={debtForm.wallet_id}
+              onChange={e => setDebtForm({ ...debtForm, wallet_id: e.target.value })}>
+              <option value="">-- Tidak terhubung wallet --</option>
+              {wallets.map(w => (
+                <option key={w.id} value={w.id}>{w.icon || '💳'} {w.name}</option>
+              ))}
+            </select>
+            {debtForm.wallet_id && !editingDebt && (
+              <p className={`text-[10px] mt-1.5 font-semibold ${debtForm.type === 'receivable' ? 'text-red-500' : 'text-green-600'}`}>
+                {debtForm.type === 'receivable'
+                  ? '⚠️ Saldo wallet akan berkurang (kamu bayarin dulu)'
+                  : '✅ Saldo wallet akan bertambah (kamu terima uang)'}
+              </p>
+            )}
+          </div>
+
           <div>
             <label className="label">Sudah Dibayar</label>
             <input className="input" type="number" inputMode="numeric" placeholder="0"
@@ -726,7 +805,6 @@ export default function DebtsPage() {
       <Modal open={showContactModal} onClose={() => { setShowContactModal(false); setEditingContact(null) }}
         title={editingContact ? 'Edit Kontak' : 'Tambah Kontak'}>
         <div className="space-y-4">
-          {/* Avatar preview */}
           <div className="flex justify-center">
             <Avatar name={contactForm.name || '?'} color={contactForm.avatar_color} size="lg" />
           </div>
@@ -776,11 +854,13 @@ export default function DebtsPage() {
                 <span className="text-surface-500">Total: <span className="font-mono">{formatCurrency(Number(payingDebt.total_amount))}</span></span>
               </div>
             </div>
+
             <div>
               <label className="label">Jumlah Bayar</label>
               <input className="input text-xl font-bold" type="number" inputMode="numeric" placeholder="0"
                 value={payAmount} onChange={e => setPayAmount(e.target.value)} autoFocus />
             </div>
+
             {/* Quick fill buttons */}
             <div className="flex gap-2">
               {[25, 50, 100].map(pct => {
@@ -794,6 +874,25 @@ export default function DebtsPage() {
                 )
               })}
             </div>
+
+            {/* Wallet selector untuk pembayaran */}
+            <div>
+              <label className="label">Dari Wallet <span className="text-surface-400 font-normal">(opsional)</span></label>
+              <select className="input" value={payWalletId} onChange={e => setPayWalletId(e.target.value)}>
+                <option value="">-- Tidak adjust wallet --</option>
+                {wallets.map(w => (
+                  <option key={w.id} value={w.id}>{w.icon || '💳'} {w.name}</option>
+                ))}
+              </select>
+              {payWalletId && (
+                <p className={`text-[10px] mt-1.5 font-semibold ${payingDebt.type === 'debt' ? 'text-red-500' : 'text-green-600'}`}>
+                  {payingDebt.type === 'debt'
+                    ? '⚠️ Saldo wallet akan berkurang (kamu bayar hutang)'
+                    : '✅ Saldo wallet akan bertambah (kamu terima piutang)'}
+                </p>
+              )}
+            </div>
+
             <button onClick={submitPay} className="btn btn-primary w-full">Simpan Pembayaran</button>
           </div>
         )}
