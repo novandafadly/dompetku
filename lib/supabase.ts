@@ -123,6 +123,7 @@ export type Debt = {
   id: string
   user_id: string
   contact_id: string | null
+  wallet_id: string | null   // wallet yang dipakai saat catat utang/piutang
   type: 'debt' | 'receivable'
   person_name: string
   total_amount: number
@@ -131,6 +132,7 @@ export type Debt = {
   due_date: string | null
   is_completed: boolean
   contacts?: Contact
+  wallets?: Wallet
 }
 
 export type RecurringTransaction = {
