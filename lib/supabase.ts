@@ -36,12 +36,15 @@ export type Transaction = {
   user_id: string
   wallet_id: string
   category_id: string | null
-  debt_id: string | null   // referensi ke debt, untuk reverse balance saat delete
+  debt_id: string | null
   type: 'income' | 'expense'
   amount: number
   description: string | null
   date: string
   created_at: string
+  // Reimbursement — untuk transaksi pribadi yang dipakai keperluan kantor
+  is_reimbursable: boolean
+  reimbursed_at: string | null
   wallets?: Wallet
   categories?: Category
 }
@@ -124,7 +127,7 @@ export type Debt = {
   id: string
   user_id: string
   contact_id: string | null
-  wallet_id: string | null   // wallet yang dipakai saat catat utang/piutang
+  wallet_id: string | null
   type: 'debt' | 'receivable'
   person_name: string
   total_amount: number
@@ -180,4 +183,14 @@ export type NetWorthSnapshot = {
   total_debt: number
   net_worth: number
   created_at: string
+}
+
+// ── Helper: cek apakah wallet adalah pocket kantor ────────
+export function isKantorWallet(wallet?: Wallet | null): boolean {
+  return wallet?.pocket === 'kantor'
+}
+
+// ── Helper: filter transaksi pribadi saja (exclude kantor) ─
+export function filterPersonalTransactions(transactions: Transaction[]): Transaction[] {
+  return transactions.filter(t => t.wallets?.pocket !== 'kantor')
 }
