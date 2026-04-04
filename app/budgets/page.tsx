@@ -1,7 +1,6 @@
 'use client'
-
 import { useEffect, useState, useMemo } from 'react'
-import { supabase } from '@/lib/supabase'
+import { supabase, filterPersonalTransactions } from '@/lib/supabase'
 import type { Budget, Category, Transaction } from '@/lib/supabase'
 import { formatCurrency, formatShort, MONTHS } from '@/lib/utils'
 import AppShell from '@/components/AppShell'
@@ -24,11 +23,16 @@ export default function BudgetsPage() {
     const [b, c, t] = await Promise.all([
       supabase.from('budgets').select('*, categories(*)').eq('period_month', now.getMonth() + 1).eq('period_year', now.getFullYear()),
       supabase.from('categories').select('*').eq('type', 'expense').order('name'),
-      supabase.from('transactions').select('*').eq('type', 'expense').gte('date', startOfMonth),
+      // FIX: join wallets untuk bisa filter pocket
+      supabase.from('transactions')
+        .select('*, wallets(pocket)')
+        .eq('type', 'expense')
+        .gte('date', startOfMonth),
     ])
     setBudgets(b.data || [])
     setCategories(c.data || [])
-    setTransactions(t.data || [])
+    // FIX: exclude transaksi dari wallet kantor — tidak masuk anggaran pribadi
+    setTransactions(filterPersonalTransactions(t.data || []))
   }
 
   function openAdd() {
@@ -48,7 +52,6 @@ export default function BudgetsPage() {
     if (!session) return
     const amount = Number(form.amount)
     if (!amount || !form.category_id) { toast('Lengkapi data!', '⚠️'); return }
-
     if (editing) {
       const { error } = await supabase.from('budgets').update({ amount, category_id: form.category_id }).eq('id', editing.id)
       if (error) { toast(error.message, '❌'); return }
