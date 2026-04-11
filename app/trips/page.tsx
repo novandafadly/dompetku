@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { Session } from '@supabase/supabase-js'
+import AppShell from '@/components/AppShell'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -74,7 +75,7 @@ function Modal({ open, onClose, children }: { open: boolean; onClose: () => void
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-[var(--card)] w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl p-5 shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div className="bg-white w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl p-5 shadow-2xl" onClick={e => e.stopPropagation()}>
         {children}
       </div>
     </div>
@@ -266,29 +267,28 @@ export default function TripPage() {
   const days = selectedTrip ? tripDays(selectedTrip.start_date, selectedTrip.end_date) : 1
 
   return (
-    <div className="min-h-screen pb-24">
+    <AppShell>
+    <div className="pb-6">
       {/* Header */}
-      <div className="sticky top-0 z-10 bg-[var(--bg)]/90 backdrop-blur border-b border-[var(--border)] px-4 py-3 flex items-center justify-between">
+      <div className="flex items-center justify-between mb-4">
         <div>
-          <h1 className="text-lg font-bold text-[var(--text)]">🧳 Trip & Healing</h1>
-          <p className="text-[11px] text-[var(--text-muted)]">{trips.length} trip tercatat</p>
+          <h1 className="text-xl sm:text-2xl font-extrabold text-surface-900">🧳 Trip & Healing</h1>
+          <p className="text-xs text-surface-400">{trips.length} trip tercatat</p>
         </div>
         <button
           onClick={() => { setEditingTrip(null); setForm(emptyForm); setShowTripModal(true) }}
-          className="btn text-sm px-3 py-1.5"
+          className="btn btn-primary py-2.5 px-4 text-sm"
         >
           + Buat Trip
         </button>
       </div>
-
-      <div className="px-4 pt-4 space-y-4">
         {/* Trip list */}
         {loading ? (
-          <div className="text-center py-12 text-[var(--text-muted)] text-sm">Memuat...</div>
+          <div className="text-center py-12 text-surface-400 text-sm">Memuat...</div>
         ) : trips.length === 0 ? (
           <div className="text-center py-16">
             <p className="text-4xl mb-3">🗺️</p>
-            <p className="text-[var(--text-muted)] text-sm">Belum ada trip. Yuk catat perjalananmu!</p>
+            <p className="text-surface-400 text-sm">Belum ada trip. Yuk catat perjalananmu!</p>
           </div>
         ) : (
           <div className="space-y-2">
@@ -301,8 +301,8 @@ export default function TripPage() {
                 <div className="flex items-center gap-3">
                   <span className="text-2xl">{trip.emoji}</span>
                   <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-sm text-[var(--text)] truncate">{trip.name}</p>
-                    <p className="text-[11px] text-[var(--text-muted)]">
+                    <p className="font-semibold text-sm text-surface-900 truncate">{trip.name}</p>
+                    <p className="text-[11px] text-surface-400">
                       {formatDateRange(trip.start_date, trip.end_date)} · {tripDays(trip.start_date, trip.end_date)} hari
                     </p>
                   </div>
@@ -314,11 +314,11 @@ export default function TripPage() {
                         setForm({ name: trip.name, emoji: trip.emoji, start_date: trip.start_date, end_date: trip.end_date || '', notes: trip.notes || '' })
                         setShowTripModal(true)
                       }}
-                      className="text-[var(--text-muted)] hover:text-[var(--text)] text-sm p-1"
+                      className="text-surface-400 hover:text-surface-900 text-sm p-1"
                     >✏️</button>
                     <button
                       onClick={e => { e.stopPropagation(); setDeleteConfirm(trip) }}
-                      className="text-[var(--text-muted)] hover:text-red-500 text-sm p-1"
+                      className="text-surface-400 hover:text-red-500 text-sm p-1"
                     >🗑️</button>
                   </div>
                 </div>
@@ -331,7 +331,7 @@ export default function TripPage() {
         {selectedTrip && (
           <div className="space-y-4">
             <div className="flex items-center gap-2 pt-2">
-              <h2 className="text-base font-bold text-[var(--text)] flex-1">{selectedTrip.emoji} {selectedTrip.name}</h2>
+              <h2 className="text-base font-bold text-surface-900 flex-1">{selectedTrip.emoji} {selectedTrip.name}</h2>
               {/* Compare toggle */}
               <button
                 onClick={() => { setCompareMode(!compareMode); if (compareMode) { setCompareTrip(null); setCompareTx([]) } }}
@@ -362,12 +362,12 @@ export default function TripPage() {
             )}
 
             {/* Tabs */}
-            <div className="flex gap-1 bg-[var(--card)] rounded-xl p-1">
+            <div className="flex gap-1 bg-white rounded-xl p-1">
               {(['summary', 'transactions'] as const).map(tab => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
-                  className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all ${activeTab === tab ? 'bg-brand-600 text-white' : 'text-[var(--text-muted)]'}`}
+                  className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all ${activeTab === tab ? 'bg-brand-600 text-white' : 'text-surface-400'}`}
                 >
                   {tab === 'summary' ? '📊 Ringkasan' : '📋 Transaksi'}
                 </button>
@@ -375,7 +375,7 @@ export default function TripPage() {
             </div>
 
             {txLoading ? (
-              <div className="text-center py-8 text-sm text-[var(--text-muted)]">Memuat transaksi...</div>
+              <div className="text-center py-8 text-sm text-surface-400">Memuat transaksi...</div>
             ) : activeTab === 'summary' ? (
               <SummaryTab
                 trip={selectedTrip}
@@ -400,7 +400,7 @@ export default function TripPage() {
 
       {/* Trip form modal */}
       <Modal open={showTripModal} onClose={() => { setShowTripModal(false); setEditingTrip(null) }}>
-        <h2 className="font-bold text-base text-[var(--text)] mb-4">{editingTrip ? 'Edit Trip' : 'Buat Trip Baru'}</h2>
+        <h2 className="font-bold text-base text-surface-900 mb-4">{editingTrip ? 'Edit Trip' : 'Buat Trip Baru'}</h2>
         <div className="space-y-3">
           {/* Emoji picker */}
           <div>
@@ -451,8 +451,8 @@ export default function TripPage() {
 
       {/* Tag modal */}
       <Modal open={showTagModal} onClose={() => setShowTagModal(false)}>
-        <h2 className="font-bold text-sm text-[var(--text)] mb-1">Tag Transaksi Manual</h2>
-        <p className="text-[11px] text-[var(--text-muted)] mb-3">
+        <h2 className="font-bold text-sm text-surface-900 mb-1">Tag Transaksi Manual</h2>
+        <p className="text-[11px] text-surface-400 mb-3">
           Transaksi di luar rentang tanggal trip yang ingin kamu masukkan ke trip ini.
         </p>
         <div className="space-y-2 max-h-72 overflow-y-auto">
@@ -468,15 +468,15 @@ export default function TripPage() {
               const inRange = tx.date >= selectedTrip!.start_date && (!selectedTrip!.end_date || tx.date <= selectedTrip!.end_date)
               if (inRange && !isTagged) return null // already in by date, not manually tagged elsewhere
               return (
-                <div key={tx.id} className="flex items-center gap-2 p-2 rounded-lg bg-[var(--bg)]">
+                <div key={tx.id} className="flex items-center gap-2 p-2 rounded-lg bg-surface-50">
                   <span className="text-base">{tx.categories?.icon || '📦'}</span>
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium text-[var(--text)] truncate">{tx.description || tx.categories?.name || 'Transaksi'}</p>
-                    <p className="text-[10px] text-[var(--text-muted)]">{tx.date} · {fmt(Number(tx.amount))}</p>
+                    <p className="text-xs font-medium text-surface-900 truncate">{tx.description || tx.categories?.name || 'Transaksi'}</p>
+                    <p className="text-[10px] text-surface-400">{tx.date} · {fmt(Number(tx.amount))}</p>
                   </div>
                   <button
                     onClick={() => toggleTag(tx)}
-                    className={`text-xs px-2 py-1 rounded-lg font-semibold transition-all ${isTagged ? 'bg-brand-100 text-brand-700' : 'bg-[var(--card)] text-[var(--text-muted)]'}`}
+                    className={`text-xs px-2 py-1 rounded-lg font-semibold transition-all ${isTagged ? 'bg-brand-100 text-brand-700' : 'bg-white text-surface-400'}`}
                   >
                     {isTagged ? '✓ Tagged' : '+ Tag'}
                   </button>
@@ -489,14 +489,15 @@ export default function TripPage() {
 
       {/* Delete confirm */}
       <Modal open={!!deleteConfirm} onClose={() => setDeleteConfirm(null)}>
-        <p className="text-sm font-semibold text-[var(--text)] mb-1">Hapus trip "{deleteConfirm?.name}"?</p>
-        <p className="text-xs text-[var(--text-muted)] mb-4">Data trip akan dihapus. Transaksi yang sudah ditag ke trip ini tidak ikut terhapus.</p>
+        <p className="text-sm font-semibold text-surface-900 mb-1">Hapus trip "{deleteConfirm?.name}"?</p>
+        <p className="text-xs text-surface-400 mb-4">Data trip akan dihapus. Transaksi yang sudah ditag ke trip ini tidak ikut terhapus.</p>
         <div className="flex gap-2">
           <button onClick={() => setDeleteConfirm(null)} className="btn-ghost flex-1">Batal</button>
           <button onClick={() => deleteTrip(deleteConfirm!)} className="flex-1 py-2 rounded-xl bg-red-500 text-white text-sm font-semibold">Hapus</button>
         </div>
       </Modal>
     </div>
+    </AppShell>
   )
 }
 
@@ -558,7 +559,7 @@ function SummaryTab({
       {/* Kategori breakdown */}
       {stats.breakdown.length > 0 && (
         <div className="card p-3">
-          <p className="text-[11px] font-bold text-[var(--text-muted)] uppercase mb-3">📊 Breakdown Kategori</p>
+          <p className="text-[11px] font-bold text-surface-400 uppercase mb-3">📊 Breakdown Kategori</p>
           <div className="space-y-2">
             {stats.breakdown.map((cat, i) => {
               const pct = stats.totalExpense > 0 ? (cat.total / stats.totalExpense) * 100 : 0
@@ -567,14 +568,14 @@ function SummaryTab({
                 <div key={i}>
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-sm">{cat.icon}</span>
-                    <span className="text-xs text-[var(--text)] flex-1">{cat.name}</span>
-                    <span className="text-xs font-semibold font-mono text-[var(--text)]">{fmtShort(cat.total)}</span>
+                    <span className="text-xs text-surface-900 flex-1">{cat.name}</span>
+                    <span className="text-xs font-semibold font-mono text-surface-900">{fmtShort(cat.total)}</span>
                     {compareTrip && compareCat && (
-                      <span className="text-[10px] text-[var(--text-muted)] font-mono ml-1">vs {fmtShort(compareCat.total)}</span>
+                      <span className="text-[10px] text-surface-400 font-mono ml-1">vs {fmtShort(compareCat.total)}</span>
                     )}
-                    <span className="text-[10px] text-[var(--text-muted)] w-8 text-right">{pct.toFixed(0)}%</span>
+                    <span className="text-[10px] text-surface-400 w-8 text-right">{pct.toFixed(0)}%</span>
                   </div>
-                  <div className="h-1.5 bg-[var(--border)] rounded-full overflow-hidden">
+                  <div className="h-1.5 bg-surface-200 rounded-full overflow-hidden">
                     <div className="h-full bg-brand-500 rounded-full" style={{ width: `${pct}%` }} />
                   </div>
                 </div>
@@ -585,7 +586,7 @@ function SummaryTab({
       )}
 
       {stats.count === 0 && (
-        <div className="text-center py-8 text-sm text-[var(--text-muted)]">
+        <div className="text-center py-8 text-sm text-surface-400">
           Belum ada pengeluaran di rentang tanggal trip ini.
         </div>
       )}
@@ -598,21 +599,21 @@ function TripStatCard({ trip, stats, days, perDay, highlighted }: {
 }) {
   return (
     <div className={`card p-3 ${highlighted ? 'ring-2 ring-brand-500' : ''}`}>
-      <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase truncate mb-2">{trip.emoji} {trip.name}</p>
-      <p className="text-[11px] text-[var(--text-muted)]">Total Expense</p>
+      <p className="text-[10px] font-bold text-surface-400 uppercase truncate mb-2">{trip.emoji} {trip.name}</p>
+      <p className="text-[11px] text-surface-400">Total Expense</p>
       <p className="text-base font-extrabold text-red-600 font-mono leading-tight">{fmtShort(stats.totalExpense)}</p>
-      <div className="mt-2 pt-2 border-t border-[var(--border)] space-y-1">
+      <div className="mt-2 pt-2 border-t border-surface-200 space-y-1">
         <div className="flex justify-between text-[10px]">
-          <span className="text-[var(--text-muted)]">Durasi</span>
-          <span className="font-semibold text-[var(--text)]">{days} hari</span>
+          <span className="text-surface-400">Durasi</span>
+          <span className="font-semibold text-surface-900">{days} hari</span>
         </div>
         <div className="flex justify-between text-[10px]">
-          <span className="text-[var(--text-muted)]">Per hari</span>
-          <span className="font-semibold text-[var(--text)] font-mono">{fmtShort(perDay)}</span>
+          <span className="text-surface-400">Per hari</span>
+          <span className="font-semibold text-surface-900 font-mono">{fmtShort(perDay)}</span>
         </div>
         <div className="flex justify-between text-[10px]">
-          <span className="text-[var(--text-muted)]">Transaksi</span>
-          <span className="font-semibold text-[var(--text)]">{stats.count}x</span>
+          <span className="text-surface-400">Transaksi</span>
+          <span className="font-semibold text-surface-900">{stats.count}x</span>
         </div>
       </div>
     </div>
@@ -625,7 +626,7 @@ function DiffRow({ label, a, b }: { label: string; a: number; b: number }) {
   return (
     <div className="flex items-center justify-between text-xs">
       <span className="text-blue-700">{label}</span>
-      <span className={`font-semibold font-mono ${diff > 0 ? 'text-red-600' : diff < 0 ? 'text-green-600' : 'text-[var(--text-muted)]'}`}>
+      <span className={`font-semibold font-mono ${diff > 0 ? 'text-red-600' : diff < 0 ? 'text-green-600' : 'text-surface-400'}`}>
         {diff > 0 ? '+' : diff < 0 ? '-' : ''}{fmtShort(Math.abs(diff))}
         {b > 0 && <span className="text-[10px] font-normal ml-1">({pct}%)</span>}
       </span>
@@ -646,19 +647,19 @@ function TransactionTab({ transactions, trip, onTagPress }: {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <p className="text-xs text-[var(--text-muted)]">{transactions.length} transaksi ditemukan</p>
+        <p className="text-xs text-surface-400">{transactions.length} transaksi ditemukan</p>
         <button onClick={onTagPress} className="btn-ghost text-xs px-2 py-1">+ Tag Manual</button>
       </div>
 
       {transactions.length === 0 && (
-        <div className="text-center py-8 text-sm text-[var(--text-muted)]">
+        <div className="text-center py-8 text-sm text-surface-400">
           Belum ada transaksi di rentang waktu ini.
         </div>
       )}
 
       {expenses.length > 0 && (
         <div>
-          <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase mb-2">💸 Pengeluaran</p>
+          <p className="text-[10px] font-bold text-surface-400 uppercase mb-2">💸 Pengeluaran</p>
           <div className="space-y-1.5">
             {expenses.map(tx => (
               <TxRow key={tx.id} tx={tx} trip={trip} />
@@ -669,7 +670,7 @@ function TransactionTab({ transactions, trip, onTagPress }: {
 
       {income.length > 0 && (
         <div>
-          <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase mb-2 mt-3">💰 Pemasukan</p>
+          <p className="text-[10px] font-bold text-surface-400 uppercase mb-2 mt-3">💰 Pemasukan</p>
           <div className="space-y-1.5">
             {income.map(tx => (
               <TxRow key={tx.id} tx={tx} trip={trip} />
@@ -686,11 +687,11 @@ function TxRow({ tx, trip }: { tx: Transaction; trip: Trip }) {
   const inRange = tx.date >= trip.start_date && (!trip.end_date || tx.date <= trip.end_date)
 
   return (
-    <div className="flex items-center gap-2 p-2.5 rounded-xl bg-[var(--card)]">
+    <div className="flex items-center gap-2 p-2.5 rounded-xl bg-white">
       <span className="text-base">{tx.categories?.icon || '📦'}</span>
       <div className="flex-1 min-w-0">
-        <p className="text-xs font-medium text-[var(--text)] truncate">{tx.description || tx.categories?.name || 'Transaksi'}</p>
-        <p className="text-[10px] text-[var(--text-muted)]">
+        <p className="text-xs font-medium text-surface-900 truncate">{tx.description || tx.categories?.name || 'Transaksi'}</p>
+        <p className="text-[10px] text-surface-400">
           {tx.date} · {tx.wallets?.name || '—'}
           {isManualTag && !inRange && <span className="ml-1 text-brand-600">• tag manual</span>}
         </p>
