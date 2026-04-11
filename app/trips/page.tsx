@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { Session } from '@supabase/supabase-js'
-import AppShell from '@/components/AppShell'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -267,8 +266,8 @@ export default function TripPage() {
   const days = selectedTrip ? tripDays(selectedTrip.start_date, selectedTrip.end_date) : 1
 
   return (
-    <AppShell>
-    <div className="pb-6">
+    <div className="bg-surface-50 min-h-screen">
+    <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 pt-16 lg:pt-6 pb-24">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div>
@@ -497,7 +496,7 @@ export default function TripPage() {
         </div>
       </Modal>
     </div>
-    </AppShell>
+    </div>
   )
 }
 
