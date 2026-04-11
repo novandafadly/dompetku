@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { Session } from '@supabase/supabase-js'
+import AppShell from '@/components/AppShell'
 
 interface Trip {
   id: string
@@ -304,8 +305,8 @@ export default function TripPage() {
   const compareDays = compareTrip ? getDays(compareTrip.start_date, compareTrip.end_date) : 1
 
   return (
-    <div className="min-h-screen bg-surface-50 pb-24">
-      <div className="max-w-2xl mx-auto px-4 pt-16 lg:pt-6">
+    <AppShell>
+      <div className="max-w-2xl mx-auto">
 
         <div className="flex items-center justify-between mb-4">
           <div>
@@ -367,8 +368,7 @@ export default function TripPage() {
           </div>
         )}
 
-        {selectedTrip && (
-          <div className="space-y-4">
+        {selectedTrip && (          <div className="space-y-4">
             <div className="flex items-center gap-2">
               <h2 className="text-base font-bold text-surface-900 flex-1">
                 {selectedTrip.emoji} {selectedTrip.name}
@@ -569,7 +569,7 @@ export default function TripPage() {
         </div>
       </SimpleModal>
 
-    </div>
+    </AppShell>
   )
 }
 
