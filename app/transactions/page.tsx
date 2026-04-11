@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState, useMemo } from 'react'
+import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import type { Transaction, Wallet, Category } from '@/lib/supabase'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -38,6 +39,7 @@ const emptyForm: FormState = {
 type ViewTab = 'personal' | 'kantor' | 'reimburse'
 
 export default function TransactionsPage() {
+  const router = useRouter()
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [wallets, setWallets] = useState<Wallet[]>([])
   const [categories, setCategories] = useState<Category[]>([])
@@ -233,6 +235,21 @@ export default function TransactionsPage() {
         </div>
         <button onClick={openAdd} className="btn btn-primary py-2.5 px-4 text-sm">+ Tambah</button>
       </div>
+
+      {/* Trip shortcut */}
+      <button
+        onClick={() => router.push('/trips')}
+        className="w-full card p-3 mb-3 flex items-center gap-3 active:bg-surface-50 transition-colors text-left"
+      >
+        <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center text-lg flex-shrink-0">
+          🧳
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-bold text-surface-800">Trip & Healing</p>
+          <p className="text-[10px] text-surface-400">Lihat rekap pengeluaran per trip</p>
+        </div>
+        <span className="text-surface-300 text-sm">→</span>
+      </button>
 
       {/* Reimburse alert */}
       {pendingReimburse.length > 0 && (
