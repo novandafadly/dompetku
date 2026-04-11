@@ -138,7 +138,7 @@ export default function TripPage() {
       .select('*, categories(name, icon), wallets(name, icon)')
       .eq('user_id', session.user.id)
       .or(
-        `and(date.gte.${trip.start_date},${trip.end_date ? `date.lte.${trip.end_date}` : `date.gte.${trip.start_date}`}),trip_id.eq.${trip.id}`
+        'and(date.gte.' + trip.start_date + ',' + (trip.end_date ? 'date.lte.' + trip.end_date : 'date.gte.' + trip.start_date) + '),trip_id.eq.' + trip.id
       )
       .neq('wallets.pocket', 'kantor') // exclude kantor pocket
       .order('date', { ascending: false })
@@ -167,7 +167,7 @@ export default function TripPage() {
         .select('*, categories(name, icon), wallets(name, icon)')
         .eq('user_id', session.user.id)
         .or(
-          `and(date.gte.${compareTrip.start_date},${compareTrip.end_date ? `date.lte.${compareTrip.end_date}` : `date.gte.${compareTrip.start_date}`}),trip_id.eq.${compareTrip.id}`
+          'and(date.gte.' + compareTrip.start_date + ',' + (compareTrip.end_date ? 'date.lte.' + compareTrip.end_date : 'date.gte.' + compareTrip.start_date) + '),trip_id.eq.' + compareTrip.id
         )
         .order('date', { ascending: false })
       const seen = new Set<string>()
