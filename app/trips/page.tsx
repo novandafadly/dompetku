@@ -502,15 +502,22 @@ export default function TripPage() {
 
 // ─── Summary Tab ──────────────────────────────────────────────────────────────
 
+interface TripStats {
+  totalExpense: number
+  totalIncome: number
+  breakdown: CategoryBreakdown[]
+  count: number
+}
+
 function SummaryTab({
   trip, stats, days,
   compareTrip, compareStats, compareDays,
 }: {
   trip: Trip
-  stats: ReturnType<typeof calcStats_>
+  stats: TripStats
   days: number
   compareTrip: Trip | null
-  compareStats: ReturnType<typeof calcStats_> | null
+  compareStats: TripStats | null
   compareDays: number
 }) {
   const perDay = days > 0 ? stats.totalExpense / days : 0
@@ -587,7 +594,7 @@ function SummaryTab({
 }
 
 function TripStatCard({ trip, stats, days, perDay, highlighted }: {
-  trip: Trip; stats: ReturnType<typeof calcStats_>; days: number; perDay: number; highlighted?: boolean
+  trip: Trip; stats: TripStats; days: number; perDay: number; highlighted?: boolean
 }) {
   return (
     <div className={`card p-3 ${highlighted ? 'ring-2 ring-brand-500' : ''}`}>
@@ -693,12 +700,4 @@ function TxRow({ tx, trip }: { tx: Transaction; trip: Trip }) {
       </span>
     </div>
   )
-}
-
-// Helper type alias for inferred return type
-type calcStats_ = (txs: Transaction[]) => {
-  totalExpense: number
-  totalIncome: number
-  breakdown: CategoryBreakdown[]
-  count: number
 }
