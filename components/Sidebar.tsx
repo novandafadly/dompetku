@@ -1,5 +1,4 @@
 'use client'
-
 import { usePathname, useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { supabase } from '@/lib/supabase'
@@ -14,6 +13,7 @@ const NAV_ITEMS = [
   { href: '/assets',       label: 'Aset & Saham',    icon: '🏦' },
   { href: '/credit-cards', label: 'Kartu Kredit',    icon: '💎' },
   { href: '/debts',        label: 'Utang/Piutang',   icon: '🤝' },
+  { href: '/trips',        label: 'Trip & Healing',  icon: '🧳' }, // ← BARU
   { href: '/categories',   label: 'Kategori',        icon: '🏷️' },
   { href: '/reports',      label: 'Laporan',         icon: '📈' },
 ]
