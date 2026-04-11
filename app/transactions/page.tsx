@@ -7,6 +7,15 @@ import AppShell from '@/components/AppShell'
 import Modal from '@/components/Modal'
 import { toast } from '@/components/Toast'
 
+// ── Trip type (lokal, tidak perlu dari lib/supabase) ──────────────────────────
+type Trip = {
+  id: string
+  name: string
+  emoji: string
+  start_date: string
+  end_date: string | null
+}
+
 type FormState = {
   wallet_id: string
   category_id: string
@@ -15,12 +24,14 @@ type FormState = {
   description: string
   date: string
   is_reimbursable: boolean
+  trip_id: string // ← BARU
 }
 
 const emptyForm: FormState = {
   wallet_id: '', category_id: '', type: 'expense', amount: '',
   description: '', date: new Date().toISOString().split('T')[0],
   is_reimbursable: false,
+  trip_id: '', // ← BARU
 }
 
 // Tab view
@@ -30,6 +41,7 @@ export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [wallets, setWallets] = useState<Wallet[]>([])
   const [categories, setCategories] = useState<Category[]>([])
+  const [trips, setTrips] = useState<Trip[]>([]) // ← BARU
   const [showAdd, setShowAdd] = useState(false)
   const [editing, setEditing] = useState<Transaction | null>(null)
   const [search, setSearch] = useState('')
@@ -42,14 +54,20 @@ export default function TransactionsPage() {
   useEffect(() => { load() }, [])
 
   async function load() {
-    const [t, w, c] = await Promise.all([
+    const { data: { session } } = await supabase.auth.getSession()
+    const [t, w, c, tr] = await Promise.all([
       supabase.from('transactions').select('*, categories(*), wallets(*)').order('date', { ascending: false }).order('created_at', { ascending: false }).limit(300),
       supabase.from('wallets').select('*').eq('is_active', true),
       supabase.from('categories').select('*').order('name'),
+      // ← BARU: load trips milik user
+      session
+        ? supabase.from('trips').select('id, name, emoji, start_date, end_date').eq('user_id', session.user.id).order('start_date', { ascending: false })
+        : Promise.resolve({ data: [] }),
     ])
     setTransactions(t.data || [])
     setWallets(w.data || [])
     setCategories(c.data || [])
+    setTrips((tr as any).data || []) // ← BARU
   }
 
   // ── Helpers ───────────────────────────────────────────────
@@ -80,7 +98,6 @@ export default function TransactionsPage() {
   // ── CRUD ──────────────────────────────────────────────────
   function openAdd() {
     setEditing(null)
-    // Pre-fill wallet kantor kalau lagi di tab kantor
     const kantorWallet = wallets.find(w => w.pocket === 'kantor')
     setForm({
       ...emptyForm,
@@ -99,6 +116,7 @@ export default function TransactionsPage() {
       description: tx.description || '',
       date: tx.date,
       is_reimbursable: tx.is_reimbursable || false,
+      trip_id: (tx as any).trip_id || '', // ← BARU
     })
     setShowAdd(true)
   }
@@ -109,16 +127,16 @@ export default function TransactionsPage() {
     const amount = Number(form.amount)
     if (!amount || !form.wallet_id) { toast('Lengkapi data!', '⚠️'); return }
     const isInvest = form.type === 'expense' && form.category_id && isInvestmentCategory(form.category_id)
-
-    // is_reimbursable hanya relevan untuk transaksi pribadi (non-kantor)
     const selectedWallet = wallets.find(w => w.id === form.wallet_id)
     const isKantor = selectedWallet?.pocket === 'kantor'
     const reimbursable = !isKantor && form.is_reimbursable
 
+    // ← BARU: trip_id — hanya untuk expense pribadi
+    const tripId = (!isKantor && form.type === 'expense' && form.trip_id) ? form.trip_id : null
+
     if (editing) {
       const { error: delError } = await supabase.from('transactions').delete().eq('id', editing.id)
       if (delError) { toast(delError.message, '❌'); return }
-
       const { error: insError } = await supabase.from('transactions').insert({
         user_id: session.user.id,
         wallet_id: form.wallet_id,
@@ -129,6 +147,7 @@ export default function TransactionsPage() {
         date: form.date,
         is_reimbursable: reimbursable,
         reimbursed_at: editing.reimbursed_at || null,
+        trip_id: tripId, // ← BARU
         ...(editing.debt_id ? { debt_id: editing.debt_id } : {}),
       })
       if (insError) { toast(insError.message, '❌'); return }
@@ -143,6 +162,7 @@ export default function TransactionsPage() {
         description: form.description || null,
         date: form.date,
         is_reimbursable: reimbursable,
+        trip_id: tripId, // ← BARU
       })
       if (error) { toast(error.message, '❌'); return }
       toast(isKantor ? 'Transaksi kas kantor dicatat! 🏢' : form.type === 'income' ? 'Pemasukan ditambahkan! 💰' : 'Pengeluaran ditambahkan! 💸')
@@ -168,21 +188,15 @@ export default function TransactionsPage() {
   }
 
   // ── Computed ──────────────────────────────────────────────
-  // Pisahkan transaksi kantor dan pribadi
   const personalTxs = useMemo(() => transactions.filter(t => t.wallets?.pocket !== 'kantor'), [transactions])
   const kantorTxs = useMemo(() => transactions.filter(t => t.wallets?.pocket === 'kantor'), [transactions])
-
-  // Transaksi pribadi yang perlu direimburse kantor
   const reimburseTxs = useMemo(() => transactions.filter(t =>
     t.is_reimbursable && t.wallets?.pocket !== 'kantor'
   ), [transactions])
   const pendingReimburse = reimburseTxs.filter(t => !t.reimbursed_at)
   const doneReimburse = reimburseTxs.filter(t => !!t.reimbursed_at)
   const totalPendingReimburse = pendingReimburse.reduce((s, t) => s + Number(t.amount), 0)
-
-  // Filter berdasarkan tab aktif
   const baseTxs = activeTab === 'kantor' ? kantorTxs : activeTab === 'reimburse' ? reimburseTxs : personalTxs
-
   const filtered = useMemo(() => baseTxs.filter(t => {
     if (filterType && t.type !== filterType) return false
     if (filterCat && t.category_id !== filterCat) return false
@@ -192,19 +206,22 @@ export default function TransactionsPage() {
     }
     return true
   }), [baseTxs, search, filterType, filterCat])
-
   const filteredCats = categories.filter(c => !form.type || c.type === form.type)
   const totalIncome = useMemo(() => filtered.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0), [filtered])
   const totalExpense = useMemo(() => filtered.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0), [filtered])
   const hasFilters = !!(filterType || filterCat || search)
-
-  // Summary pribadi (exclude kantor)
   const personalIncome = useMemo(() => personalTxs.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0), [personalTxs])
   const personalExpense = useMemo(() => personalTxs.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0), [personalTxs])
-
-  // Wallet kantor untuk info
   const kantorWallets = wallets.filter(w => w.pocket === 'kantor')
   const selectedWalletPocket = wallets.find(w => w.id === form.wallet_id)?.pocket
+
+  // ← BARU: helper cari nama trip untuk badge di list transaksi
+  function getTripBadge(tx: Transaction) {
+    const tripId = (tx as any).trip_id
+    if (!tripId) return null
+    const trip = trips.find(t => t.id === tripId)
+    return trip ? `${trip.emoji} ${trip.name}` : null
+  }
 
   return (
     <AppShell>
@@ -234,22 +251,13 @@ export default function TransactionsPage() {
 
       {/* Tabs */}
       <div className="flex gap-1.5 mb-4 bg-surface-100 p-1 rounded-xl">
-        <button
-          onClick={() => setActiveTab('personal')}
-          className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all ${activeTab === 'personal' ? 'bg-white text-surface-900 shadow-sm' : 'text-surface-500'}`}
-        >
+        <button onClick={() => setActiveTab('personal')} className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all ${activeTab === 'personal' ? 'bg-white text-surface-900 shadow-sm' : 'text-surface-500'}`}>
           👤 Pribadi
         </button>
-        <button
-          onClick={() => setActiveTab('kantor')}
-          className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all ${activeTab === 'kantor' ? 'bg-white text-surface-900 shadow-sm' : 'text-surface-500'}`}
-        >
+        <button onClick={() => setActiveTab('kantor')} className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all ${activeTab === 'kantor' ? 'bg-white text-surface-900 shadow-sm' : 'text-surface-500'}`}>
           🏢 Kas Kantor
         </button>
-        <button
-          onClick={() => setActiveTab('reimburse')}
-          className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all relative ${activeTab === 'reimburse' ? 'bg-white text-surface-900 shadow-sm' : 'text-surface-500'}`}
-        >
+        <button onClick={() => setActiveTab('reimburse')} className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all relative ${activeTab === 'reimburse' ? 'bg-white text-surface-900 shadow-sm' : 'text-surface-500'}`}>
           💼 Reimburse
           {pendingReimburse.length > 0 && (
             <span className="absolute -top-1 -right-1 w-4 h-4 bg-amber-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center">
@@ -259,7 +267,7 @@ export default function TransactionsPage() {
         </button>
       </div>
 
-      {/* Tab: Pribadi — summary */}
+      {/* Tab summaries */}
       {activeTab === 'personal' && (
         <div className="grid grid-cols-2 gap-2 mb-4">
           <div className="card p-3">
@@ -272,8 +280,6 @@ export default function TransactionsPage() {
           </div>
         </div>
       )}
-
-      {/* Tab: Kas Kantor — info wallets */}
       {activeTab === 'kantor' && kantorWallets.length > 0 && (
         <div className="flex gap-2 mb-4 overflow-x-auto pb-1">
           {kantorWallets.map(w => (
@@ -285,8 +291,6 @@ export default function TransactionsPage() {
           ))}
         </div>
       )}
-
-      {/* Tab: Reimburse — summary */}
       {activeTab === 'reimburse' && (
         <div className="grid grid-cols-2 gap-2 mb-4">
           <div className="card p-3 bg-amber-50 border border-amber-200">
@@ -306,23 +310,14 @@ export default function TransactionsPage() {
 
       {/* Search + filter */}
       <div className="flex gap-2 mb-3">
-        <input
-          className="input flex-1 text-sm"
-          placeholder="🔍 Cari transaksi..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        <button
-          onClick={() => setShowFilters(!showFilters)}
-          className={`btn min-w-0 px-3 ${(filterType || filterCat) ? 'btn-primary' : 'btn-secondary'}`}
-        >
+        <input className="input flex-1 text-sm" placeholder="🔍 Cari transaksi..." value={search} onChange={(e) => setSearch(e.target.value)} />
+        <button onClick={() => setShowFilters(!showFilters)} className={`btn min-w-0 px-3 ${(filterType || filterCat) ? 'btn-primary' : 'btn-secondary'}`}>
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h18M6 8h12M9 12h6" />
           </svg>
           {(filterType || filterCat) && <span className="text-xs">•</span>}
         </button>
       </div>
-
       {showFilters && (
         <div className="card p-3 mb-3 flex flex-col sm:flex-row gap-2">
           <select className="input flex-1 text-sm" value={filterType} onChange={(e) => setFilterType(e.target.value)}>
@@ -339,7 +334,6 @@ export default function TransactionsPage() {
           )}
         </div>
       )}
-
       {hasFilters && (
         <div className="grid grid-cols-2 gap-2 mb-3">
           <div className="card p-3 flex items-center justify-between">
@@ -361,9 +355,9 @@ export default function TransactionsPage() {
               const isKantor = tx.wallets?.pocket === 'kantor'
               const isPendingReimburse = tx.is_reimbursable && !tx.reimbursed_at
               const isDoneReimburse = tx.is_reimbursable && !!tx.reimbursed_at
+              const tripBadge = getTripBadge(tx) // ← BARU
               return (
                 <div key={tx.id} className="flex items-center gap-3 px-4 py-3.5 active:bg-surface-50 transition-colors">
-                  {/* Tap item untuk edit */}
                   <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg flex-shrink-0 cursor-pointer" style={{ background: isKantor ? '#f3e8ff' : tx.type === 'income' ? '#dcfce7' : '#fee2e2' }} onClick={() => openEdit(tx)}>
                     {isKantor ? '🏢' : tx.categories?.icon || (tx.type === 'income' ? '💰' : '💸')}
                   </div>
@@ -374,13 +368,14 @@ export default function TransactionsPage() {
                       {tx.debt_id && <span className="bg-surface-100 text-surface-500 px-1.5 rounded text-[9px]">🤝 Utang/Piutang</span>}
                       {isPendingReimburse && <span className="bg-amber-100 text-amber-700 px-1.5 rounded text-[9px] font-bold">⏳ Belum reimburse</span>}
                       {isDoneReimburse && <span className="bg-green-100 text-green-700 px-1.5 rounded text-[9px] font-bold">✅ Sudah reimburse</span>}
+                      {/* ← BARU: badge trip */}
+                      {tripBadge && <span className="bg-blue-50 text-blue-700 px-1.5 rounded text-[9px] font-bold">{tripBadge}</span>}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     <p className={`text-sm font-bold font-mono ${tx.type === 'income' ? 'text-green-600' : isKantor ? 'text-purple-600' : 'text-red-500'}`} onClick={() => openEdit(tx)}>
                       {tx.type === 'income' ? '+' : '-'}{new Intl.NumberFormat('id-ID', { notation: 'compact', style: 'currency', currency: 'IDR', maximumFractionDigits: 1 }).format(Number(tx.amount))}
                     </p>
-                    {/* Tombol reimburse hanya untuk transaksi pribadi yang is_reimbursable */}
                     {tx.is_reimbursable && (
                       <button
                         onClick={() => markReimbursed(tx)}
@@ -416,15 +411,12 @@ export default function TransactionsPage() {
               <span>Transaksi ini terhubung ke catatan utang/piutang. Sebaiknya ubah langsung dari halaman Utang & Piutang.</span>
             </div>
           )}
-
-          {/* Info kalau wallet kantor dipilih */}
           {selectedWalletPocket === 'kantor' && (
             <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl text-xs text-purple-800 flex gap-2">
               <span>🏢</span>
               <span>Transaksi ini akan <strong>tidak dihitung</strong> ke keuangan pribadi kamu.</span>
             </div>
           )}
-
           <div>
             <label className="label">Tipe</label>
             <div className="grid grid-cols-2 gap-2">
@@ -463,7 +455,31 @@ export default function TransactionsPage() {
             <input className="input" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
           </div>
 
-          {/* Toggle reimburse — hanya tampil kalau wallet BUKAN kantor */}
+          {/* ── BARU: Tag Trip — hanya untuk expense pribadi ── */}
+          {form.type === 'expense' && selectedWalletPocket !== 'kantor' && trips.length > 0 && (
+            <div>
+              <label className="label">🧳 Tag ke Trip (opsional)</label>
+              <select
+                className="input"
+                value={form.trip_id}
+                onChange={(e) => setForm({ ...form, trip_id: e.target.value })}
+              >
+                <option value="">— Tidak terhubung trip —</option>
+                {trips.map(t => (
+                  <option key={t.id} value={t.id}>
+                    {t.emoji} {t.name} ({t.start_date}{t.end_date ? ` – ${t.end_date}` : ''})
+                  </option>
+                ))}
+              </select>
+              {form.trip_id && (
+                <p className="text-[10px] text-blue-600 mt-1">
+                  ✓ Transaksi ini akan muncul di ringkasan trip tersebut
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Toggle reimburse */}
           {selectedWalletPocket && selectedWalletPocket !== 'kantor' && form.type === 'expense' && (
             <button
               onClick={() => setForm({ ...form, is_reimbursable: !form.is_reimbursable })}
@@ -487,7 +503,6 @@ export default function TransactionsPage() {
               <span>Akan <strong>otomatis tercatat di Aset</strong> dengan nama "{form.description || categories.find(c => c.id === form.category_id)?.name}".</span>
             </div>
           )}
-
           <div className="flex gap-2 pt-1">
             {editing && <button onClick={() => { deleteTx(editing.id); setShowAdd(false) }} className="btn btn-danger flex-1">Hapus</button>}
             <button onClick={saveTransaction} className="btn btn-primary flex-1">{editing ? 'Simpan' : 'Tambah'}</button>
