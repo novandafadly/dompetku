@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { Session } from '@supabase/supabase-js'
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// --- Types --------------------------------------------------------------------
 
 interface Trip {
   id: string
@@ -36,7 +36,7 @@ interface CategoryBreakdown {
   count: number
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// --- Helpers ------------------------------------------------------------------
 
 const fmt = (n: number) =>
   'Rp ' +
@@ -68,7 +68,7 @@ function tripDays(start: string, end: string | null): number {
   return Math.max(1, Math.round(diff / 86400000) + 1)
 }
 
-// ─── Modal ────────────────────────────────────────────────────────────────────
+// --- Modal --------------------------------------------------------------------
 
 function Modal({ open, onClose, children }: { open: boolean; onClose: () => void; children: React.ReactNode }) {
   if (!open) return null
@@ -81,7 +81,7 @@ function Modal({ open, onClose, children }: { open: boolean; onClose: () => void
   )
 }
 
-// ─── Main Component ───────────────────────────────────────────────────────────
+// --- Main Component -----------------------------------------------------------
 
 export default function TripPage() {
   const [session, setSession] = useState<Session | null>(null)
@@ -105,14 +105,14 @@ export default function TripPage() {
 
   const EMOJIS = ['✈️', '🏖️', '⛰️', '🏕️', '🚗', '🚂', '🛳️', '🏔️', '🌏', '🎡', '🏝️', '🧳']
 
-  // ── Auth ──
+  // -- Auth --
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session))
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_, s) => setSession(s))
     return () => subscription.unsubscribe()
   }, [])
 
-  // ── Load trips ──
+  // -- Load trips --
   const loadTrips = useCallback(async () => {
     if (!session) return
     setLoading(true)
@@ -127,7 +127,7 @@ export default function TripPage() {
 
   useEffect(() => { loadTrips() }, [loadTrips])
 
-  // ── Load transactions for a trip ──
+  // -- Load transactions for a trip --
   const loadTripTransactions = useCallback(async (trip: Trip) => {
     if (!session) return
     setTxLoading(true)
@@ -158,7 +158,7 @@ export default function TripPage() {
     if (selectedTrip) loadTripTransactions(selectedTrip)
   }, [selectedTrip, loadTripTransactions])
 
-  // ── Load compare trip transactions ──
+  // -- Load compare trip transactions --
   useEffect(() => {
     const load = async () => {
       if (!compareTrip || !session) return
@@ -181,7 +181,7 @@ export default function TripPage() {
     load()
   }, [compareTrip, session])
 
-  // ── Load all user transactions for manual tagging ──
+  // -- Load all user transactions for manual tagging --
   const loadAllUserTx = useCallback(async () => {
     if (!session || !selectedTrip) return
     const { data } = await supabase
@@ -194,7 +194,7 @@ export default function TripPage() {
     setAllUserTx(data || [])
   }, [session, selectedTrip])
 
-  // ── Stats helper ──
+  // -- Stats helper --
   function calcStats(txs: Transaction[]) {
     const expenses = txs.filter(t => t.type === 'expense')
     const income = txs.filter(t => t.type === 'income')
@@ -215,7 +215,7 @@ export default function TripPage() {
     return { totalExpense, totalIncome, breakdown, count: expenses.length }
   }
 
-  // ── Save trip ──
+  // -- Save trip --
   async function saveTrip() {
     if (!session || !form.name || !form.start_date) return
     const payload = {
@@ -248,7 +248,7 @@ export default function TripPage() {
     loadTrips()
   }
 
-  // ── Toggle manual tag ──
+  // -- Toggle manual tag --
   async function toggleTag(tx: Transaction) {
     if (!selectedTrip) return
     const isTagged = tx.trip_id === selectedTrip.id
@@ -260,7 +260,7 @@ export default function TripPage() {
     loadAllUserTx()
   }
 
-  // ── Render ──
+  // -- Render --
   const stats = selectedTrip ? calcStats(transactions) : null
   const compareStats = compareTrip ? calcStats(compareTx) : null
   const days = selectedTrip ? tripDays(selectedTrip.start_date, selectedTrip.end_date) : 1
@@ -395,7 +395,7 @@ export default function TripPage() {
         )}
       </div>
 
-      {/* ── Modals ── */}
+      {/* -- Modals -- */}
 
       {/* Trip form modal */}
       <Modal open={showTripModal} onClose={() => { setShowTripModal(false); setEditingTrip(null) }}>
@@ -500,7 +500,7 @@ export default function TripPage() {
   )
 }
 
-// ─── Summary Tab ──────────────────────────────────────────────────────────────
+// --- Summary Tab --------------------------------------------------------------
 
 interface TripStats {
   totalExpense: number
@@ -633,7 +633,7 @@ function DiffRow({ label, a, b }: { label: string; a: number; b: number }) {
   )
 }
 
-// ─── Transaction Tab ───────────────────────────────────────────────────────────
+// --- Transaction Tab -----------------------------------------------------------
 
 function TransactionTab({ transactions, trip, onTagPress }: {
   transactions: Transaction[]
