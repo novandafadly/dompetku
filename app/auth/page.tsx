@@ -1,5 +1,4 @@
 'use client'
-
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
@@ -28,7 +27,7 @@ export default function AuthPage() {
         router.replace('/dashboard')
       }
     } else {
-      const { error } = await supabase.auth.signUp({
+      const { data, error } = await supabase.auth.signUp({
         email,
         password,
         options: { data: { full_name: fullName } },
@@ -36,10 +35,24 @@ export default function AuthPage() {
       if (error) {
         setError(error.message)
       } else {
-        setSuccess('Akun berhasil dibuat! Silakan cek email untuk verifikasi, atau langsung login.')
+        // Fallback upsert — handle_new_user trigger sudah set ini,
+        // tapi upsert ini jaga-jaga kalau trigger delay
+        if (data.user) {
+          await supabase.from('profiles').upsert({
+            id: data.user.id,
+            full_name: fullName,
+            role: 'trial',
+            trial_expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+          }, { onConflict: 'id', ignoreDuplicates: true })
+        }
+        setSuccess('Akun berhasil dibuat! Kamu mendapatkan akses trial 1 hari. Silakan login.')
         setIsLogin(true)
+        setEmail('')
+        setPassword('')
+        setFullName('')
       }
     }
+
     setLoading(false)
   }
 
@@ -65,15 +78,29 @@ export default function AuthPage() {
             {isLogin ? 'Masuk ke Akun' : 'Buat Akun Baru'}
           </h2>
           <p className="text-sm text-surface-400 mb-6">
-            {isLogin ? 'Masukkan email dan password kamu' : 'Daftar gratis untuk mulai mengelola keuangan'}
+            {isLogin
+              ? 'Masukkan email dan password kamu'
+              : 'Daftar gratis, dapatkan akses trial 1 hari'}
           </p>
+
+          {/* Trial info banner — hanya saat register */}
+          {!isLogin && (
+            <div className="bg-brand-50 border border-brand-200 rounded-xl px-4 py-3 mb-4 flex items-start gap-3">
+              <span className="text-lg">⏳</span>
+              <div>
+                <p className="text-sm font-semibold text-brand-700">Akses Trial 1 Hari</p>
+                <p className="text-xs text-brand-600 mt-0.5">
+                  Coba semua fitur DompetKu selama 24 jam. Data akan dihapus otomatis setelah trial berakhir.
+                </p>
+              </div>
+            </div>
+          )}
 
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-xl mb-4">
               {error}
             </div>
           )}
-
           {success && (
             <div className="bg-green-50 border border-green-200 text-green-700 text-sm px-4 py-3 rounded-xl mb-4">
               {success}
@@ -94,7 +121,6 @@ export default function AuthPage() {
                 />
               </div>
             )}
-
             <div>
               <label className="label">Email</label>
               <input
@@ -106,7 +132,6 @@ export default function AuthPage() {
                 required
               />
             </div>
-
             <div>
               <label className="label">Password</label>
               <input
@@ -119,14 +144,17 @@ export default function AuthPage() {
                 minLength={6}
               />
             </div>
-
-            <button type="submit" className="btn btn-primary w-full py-3 text-base" disabled={loading}>
+            <button
+              type="submit"
+              className="btn btn-primary w-full py-3 text-base"
+              disabled={loading}
+            >
               {loading ? (
-                <span className="flex items-center gap-2">
+                <span className="flex items-center justify-center gap-2">
                   <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                   Memproses...
                 </span>
-              ) : isLogin ? 'Masuk' : 'Daftar'}
+              ) : isLogin ? 'Masuk' : 'Daftar & Mulai Trial'}
             </button>
           </form>
 
