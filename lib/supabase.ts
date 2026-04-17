@@ -5,6 +5,12 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
+export type Profile = {
+  id: string
+  full_name: string | null
+  role: 'permanent' | 'trial'
+  trial_expires_at: string | null
+}
 export type Pocket = 'operasional' | 'tabungan' | 'kantor'
 
 export type Wallet = {
