@@ -22,18 +22,22 @@ export async function middleware(request: NextRequest) {
   )
 
   const { data: { user } } = await supabase.auth.getUser()
-  const isAuthPage = request.nextUrl.pathname.startsWith('/auth')
-  const isTrialExpiredPage = request.nextUrl.pathname.startsWith('/trial-expired')
 
-  if (!user && !isAuthPage) {
+  const pathname = request.nextUrl.pathname
+  const isAuthPage = pathname.startsWith('/auth')
+  const isTrialExpiredPage = pathname.startsWith('/trial-expired')
+
+  // Kalau tidak ada user, paksa ke /auth (kecuali sudah di halaman publik)
+  if (!user && !isAuthPage && !isTrialExpiredPage) {
     return NextResponse.redirect(new URL('/auth', request.url))
   }
 
+  // Kalau sudah login, jangan bisa akses /auth lagi
   if (user && isAuthPage) {
     return NextResponse.redirect(new URL('/dashboard', request.url))
   }
 
-  // Cek trial expired
+  // Cek trial expired — TANPA signOut di sini
   if (user && !isTrialExpiredPage && !isAuthPage) {
     const { data: profile } = await supabase
       .from('profiles')
@@ -46,8 +50,7 @@ export async function middleware(request: NextRequest) {
       profile?.trial_expires_at &&
       new Date(profile.trial_expires_at) < new Date()
     ) {
-      await supabase.rpc('cleanup_expired_trials')
-      await supabase.auth.signOut()
+      // Jangan signOut di sini! Redirect dulu, signOut di halaman trial-expired
       return NextResponse.redirect(new URL('/trial-expired', request.url))
     }
   }
