@@ -1,5 +1,13 @@
 'use client'
+import { useEffect } from 'react'
+import { supabase } from '@/lib/supabase'
+
 export default function TrialExpiredPage() {
+  useEffect(() => {
+    // Sign out di client side, bukan di middleware
+    supabase.auth.signOut()
+  }, [])
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-brand-50 via-white to-surface-100 p-4">
       <div className="card p-10 max-w-md w-full text-center">
