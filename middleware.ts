@@ -12,23 +12,19 @@ export async function middleware(request: NextRequest) {
         getAll() {
           return request.cookies.getAll()
         },
-        setAll(cookiesToSet) {
-          // Set di request dulu
+        setAll(cookiesToSet: { name: string; value: string; options?: Record<string, unknown> }[]) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           )
-          // Buat response BARU yang carry semua request headers
           supabaseResponse = NextResponse.next({ request })
-          // Baru set di response
           cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
+            supabaseResponse.cookies.set(name, value, options as Parameters<typeof supabaseResponse.cookies.set>[2])
           )
         },
       },
     }
   )
 
-  // PENTING: getUser() harus dipanggil agar cookie ter-refresh
   const { data: { user } } = await supabase.auth.getUser()
 
   const pathname = request.nextUrl.pathname
@@ -65,8 +61,6 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  // KRUSIAL: return supabaseResponse, BUKAN NextResponse.next()
-  // supaya cookies yang di-set Supabase ikut terbawa
   return supabaseResponse
 }
 
