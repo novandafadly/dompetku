@@ -44,6 +44,8 @@ export default function TransactionsPage() {
   const [trips, setTrips] = useState<Trip[]>([])
   const [showAdd, setShowAdd] = useState(false)
   const [editing, setEditing] = useState<Transaction | null>(null)
+  const [reimburseTarget, setReimburseTarget] = useState<Transaction | null>(null)
+  const [reimburseForm, setReimburseForm] = useState({ wallet_id: '', date: new Date().toISOString().split('T')[0] })
   const [search, setSearch] = useState('')
   const [filterType, setFilterType] = useState('')
   const [filterCat, setFilterCat] = useState('')
@@ -188,12 +190,50 @@ export default function TransactionsPage() {
     toast('Transaksi dihapus', '🗑️'); load()
   }
 
-  async function markReimbursed(tx: Transaction) {
-    const already = !!(tx as any).reimbursed_at
-    await supabase.from('transactions').update({
-      reimbursed_at: already ? null : new Date().toISOString(),
+  function openReimburseModal(tx: Transaction) {
+    if (!!(tx as any).reimbursed_at) {
+      undoReimburse(tx)
+      return
+    }
+    setReimburseTarget(tx)
+    setReimburseForm({ wallet_id: '', date: new Date().toISOString().split('T')[0] })
+  }
+
+  async function undoReimburse(tx: Transaction) {
+    await supabase.from('transactions').update({ reimbursed_at: null }).eq('id', tx.id)
+    toast('Ditandai belum direimburse', '🔄')
+    load()
+  }
+
+  async function confirmReimburse() {
+    if (!reimburseTarget) return
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) return
+    if (!reimburseForm.wallet_id) { toast('Pilih wallet tujuan dulu!', '⚠️'); return }
+
+    const tx = reimburseTarget
+    const amount = Number(tx.amount)
+    const desc = tx.description || (tx as any).categories?.name || 'Transaksi'
+
+    const { error: updateErr } = await supabase.from('transactions').update({
+      reimbursed_at: new Date().toISOString(),
     }).eq('id', tx.id)
-    toast(already ? 'Ditandai belum direimburse' : '✅ Ditandai sudah direimburse!', already ? '🔄' : '✅')
+    if (updateErr) { toast(updateErr.message, '❌'); return }
+
+    const { error: insertErr } = await supabase.from('transactions').insert({
+      user_id: session.user.id,
+      wallet_id: reimburseForm.wallet_id,
+      type: 'income',
+      amount,
+      description: `Reimburse: ${desc}`,
+      date: reimburseForm.date,
+      category_id: null,
+      is_reimbursable: false,
+    })
+    if (insertErr) { toast(insertErr.message, '❌'); return }
+
+    toast('✅ Reimburse dicatat & masuk ke wallet!', '💰')
+    setReimburseTarget(null)
     load()
   }
 
@@ -588,7 +628,7 @@ export default function TransactionsPage() {
                     </p>
                     {(tx as any).is_reimbursable && (
                       <button
-                        onClick={() => markReimbursed(tx)}
+                        onClick={() => openReimburseModal(tx)}
                         className={`w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-all ${(tx as any).reimbursed_at ? 'bg-green-100 text-green-600' : 'bg-amber-100 text-amber-600 hover:bg-amber-200'}`}
                         title={(tx as any).reimbursed_at ? 'Sudah direimburse — klik untuk batal' : 'Tandai sudah direimburse'}
                       >
@@ -715,6 +755,58 @@ export default function TransactionsPage() {
             <button onClick={saveTransaction} className="btn btn-primary flex-1">{editing ? 'Simpan' : 'Tambah'}</button>
           </div>
         </div>
+      </Modal>
+      {/* Reimburse Confirmation Modal */}
+      <Modal open={!!reimburseTarget} onClose={() => setReimburseTarget(null)} title="Konfirmasi Reimburse">
+        {reimburseTarget && (
+          <div className="space-y-4">
+            {/* Info transaksi */}
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
+              <p className="text-xs text-amber-700 font-bold mb-0.5">Transaksi yang direimburse:</p>
+              <p className="text-sm font-semibold text-surface-800">{reimburseTarget.description || (reimburseTarget as any).categories?.name || 'Transaksi'}</p>
+              <p className="text-xs text-surface-500">{formatDate(reimburseTarget.date)} · {(reimburseTarget as any).wallets?.name}</p>
+              <p className="text-lg font-extrabold text-amber-700 font-mono mt-1">{formatCurrency(Number(reimburseTarget.amount))}</p>
+            </div>
+
+            {/* Wallet tujuan */}
+            <div>
+              <label className="label">Masuk ke wallet mana?</label>
+              <select
+                className="input"
+                value={reimburseForm.wallet_id}
+                onChange={(e) => setReimburseForm({ ...reimburseForm, wallet_id: e.target.value })}
+              >
+                <option value="">Pilih wallet</option>
+                {wallets.filter(w => w.pocket !== 'kantor').map(w => (
+                  <option key={w.id} value={w.id}>
+                    {w.pocket === 'tabungan' ? '💰' : '👤'} {w.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Tanggal reimburse diterima */}
+            <div>
+              <label className="label">Tanggal diterima</label>
+              <input
+                className="input"
+                type="date"
+                value={reimburseForm.date}
+                onChange={(e) => setReimburseForm({ ...reimburseForm, date: e.target.value })}
+              />
+            </div>
+
+            <div className="p-3 bg-green-50 border border-green-200 rounded-xl text-xs text-green-800 flex gap-2">
+              <span>💡</span>
+              <span>Akan otomatis dibuat transaksi <strong>pemasukan {formatCurrency(Number(reimburseTarget.amount))}</strong> di wallet yang dipilih.</span>
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => setReimburseTarget(null)} className="btn btn-secondary flex-1">Batal</button>
+              <button onClick={confirmReimburse} className="btn btn-primary flex-1">✅ Konfirmasi</button>
+            </div>
+          </div>
+        )}
       </Modal>
     </AppShell>
   )
