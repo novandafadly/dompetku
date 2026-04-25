@@ -8,7 +8,6 @@ import AppShell from '@/components/AppShell'
 import Modal from '@/components/Modal'
 import { toast } from '@/components/Toast'
 
-// ── Trip type (lokal, tidak perlu dari lib/supabase) ──────────────────────────
 type Trip = {
   id: string
   name: string
@@ -25,17 +24,16 @@ type FormState = {
   description: string
   date: string
   is_reimbursable: boolean
-  trip_id: string // ← BARU
+  trip_id: string
 }
 
 const emptyForm: FormState = {
   wallet_id: '', category_id: '', type: 'expense', amount: '',
   description: '', date: new Date().toISOString().split('T')[0],
   is_reimbursable: false,
-  trip_id: '', // ← BARU
+  trip_id: '',
 }
 
-// Tab view
 type ViewTab = 'personal' | 'kantor' | 'reimburse'
 
 export default function TransactionsPage() {
@@ -43,12 +41,15 @@ export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [wallets, setWallets] = useState<Wallet[]>([])
   const [categories, setCategories] = useState<Category[]>([])
-  const [trips, setTrips] = useState<Trip[]>([]) // ← BARU
+  const [trips, setTrips] = useState<Trip[]>([])
   const [showAdd, setShowAdd] = useState(false)
   const [editing, setEditing] = useState<Transaction | null>(null)
   const [search, setSearch] = useState('')
   const [filterType, setFilterType] = useState('')
   const [filterCat, setFilterCat] = useState('')
+  const [filterWallet, setFilterWallet] = useState('')
+  const [filterDateFrom, setFilterDateFrom] = useState('')
+  const [filterDateTo, setFilterDateTo] = useState('')
   const [showFilters, setShowFilters] = useState(false)
   const [form, setForm] = useState<FormState>(emptyForm)
   const [activeTab, setActiveTab] = useState<ViewTab>('personal')
@@ -61,20 +62,19 @@ export default function TransactionsPage() {
       supabase.from('transactions').select('*, categories(*), wallets(*)').order('date', { ascending: false }).order('created_at', { ascending: false }).limit(300),
       supabase.from('wallets').select('*').eq('is_active', true),
       supabase.from('categories').select('*').order('name'),
-      // ← BARU: load trips milik user
       session
         ? supabase.from('trips').select('id, name, emoji, start_date, end_date').eq('user_id', session.user.id).order('start_date', { ascending: false })
         : Promise.resolve({ data: [] }),
     ])
-    setTransactions(t.data || [])
-    setWallets(w.data || [])
-    setCategories(c.data || [])
-    setTrips((tr as any).data || []) // ← BARU
+    setTransactions((t.data) || [])
+    setWallets((w.data) || [])
+    setCategories((c.data) || [])
+    setTrips((tr as any).data || [])
   }
 
   // ── Helpers ───────────────────────────────────────────────
   function isKantorTx(tx: Transaction) {
-    return tx.wallets?.pocket === 'kantor'
+    return (tx as any).wallets?.pocket === 'kantor'
   }
 
   function isInvestmentCategory(catId: string): boolean {
@@ -97,6 +97,17 @@ export default function TransactionsPage() {
     }
   }
 
+  // ── Tab switch helper ─────────────────────────────────────
+  function switchTab(tab: ViewTab) {
+    setActiveTab(tab)
+    setFilterWallet('')
+    setFilterCat('')
+    setFilterType('')
+    setFilterDateFrom('')
+    setFilterDateTo('')
+    setSearch('')
+  }
+
   // ── CRUD ──────────────────────────────────────────────────
   function openAdd() {
     setEditing(null)
@@ -117,8 +128,8 @@ export default function TransactionsPage() {
       amount: String(tx.amount),
       description: tx.description || '',
       date: tx.date,
-      is_reimbursable: tx.is_reimbursable || false,
-      trip_id: (tx as any).trip_id || '', // ← BARU
+      is_reimbursable: (tx as any).is_reimbursable || false,
+      trip_id: (tx as any).trip_id || '',
     })
     setShowAdd(true)
   }
@@ -131,9 +142,7 @@ export default function TransactionsPage() {
     const isInvest = form.type === 'expense' && form.category_id && isInvestmentCategory(form.category_id)
     const selectedWallet = wallets.find(w => w.id === form.wallet_id)
     const isKantor = selectedWallet?.pocket === 'kantor'
-    const reimbursable = !isKantor && form.is_reimbursable
-
-    // ← BARU: trip_id — hanya untuk expense pribadi
+    const reimbursable = !isKantor && (form as any).is_reimbursable
     const tripId = (!isKantor && form.type === 'expense' && form.trip_id) ? form.trip_id : null
 
     if (editing) {
@@ -148,9 +157,9 @@ export default function TransactionsPage() {
         description: form.description || null,
         date: form.date,
         is_reimbursable: reimbursable,
-        reimbursed_at: editing.reimbursed_at || null,
-        trip_id: tripId, // ← BARU
-        ...(editing.debt_id ? { debt_id: editing.debt_id } : {}),
+        reimbursed_at: (editing as any).reimbursed_at || null,
+        trip_id: tripId,
+        ...((editing as any).debt_id ? { debt_id: (editing as any).debt_id } : {}),
       })
       if (insError) { toast(insError.message, '❌'); return }
       toast('Transaksi diperbarui!', '✅')
@@ -164,7 +173,7 @@ export default function TransactionsPage() {
         description: form.description || null,
         date: form.date,
         is_reimbursable: reimbursable,
-        trip_id: tripId, // ← BARU
+        trip_id: tripId,
       })
       if (error) { toast(error.message, '❌'); return }
       toast(isKantor ? 'Transaksi kas kantor dicatat! 🏢' : form.type === 'income' ? 'Pemasukan ditambahkan! 💰' : 'Pengeluaran ditambahkan! 💸')
@@ -179,9 +188,8 @@ export default function TransactionsPage() {
     toast('Transaksi dihapus', '🗑️'); load()
   }
 
-  // ── Tandai sudah direimburse ──────────────────────────────
   async function markReimbursed(tx: Transaction) {
-    const already = !!tx.reimbursed_at
+    const already = !!(tx as any).reimbursed_at
     await supabase.from('transactions').update({
       reimbursed_at: already ? null : new Date().toISOString(),
     }).eq('id', tx.id)
@@ -190,39 +198,69 @@ export default function TransactionsPage() {
   }
 
   // ── Computed ──────────────────────────────────────────────
-  const personalTxs = useMemo(() => transactions.filter(t => t.wallets?.pocket !== 'kantor'), [transactions])
-  const kantorTxs = useMemo(() => transactions.filter(t => t.wallets?.pocket === 'kantor'), [transactions])
+  const personalTxs = useMemo(() => transactions.filter(t => (t as any).wallets?.pocket !== 'kantor'), [transactions])
+  const kantorTxs = useMemo(() => transactions.filter(t => (t as any).wallets?.pocket === 'kantor'), [transactions])
   const reimburseTxs = useMemo(() => transactions.filter(t =>
-    t.is_reimbursable && t.wallets?.pocket !== 'kantor'
+    (t as any).is_reimbursable && (t as any).wallets?.pocket !== 'kantor'
   ), [transactions])
-  const pendingReimburse = reimburseTxs.filter(t => !t.reimbursed_at)
-  const doneReimburse = reimburseTxs.filter(t => !!t.reimbursed_at)
+
+  const pendingReimburse = reimburseTxs.filter(t => !(t as any).reimbursed_at)
+  const doneReimburse = reimburseTxs.filter(t => !!(t as any).reimbursed_at)
   const totalPendingReimburse = pendingReimburse.reduce((s, t) => s + Number(t.amount), 0)
+
   const baseTxs = activeTab === 'kantor' ? kantorTxs : activeTab === 'reimburse' ? reimburseTxs : personalTxs
+
+  // Wallet options sesuai tab aktif
+  const walletOptions = useMemo(() => {
+    if (activeTab === 'kantor') return wallets.filter(w => w.pocket === 'kantor')
+    if (activeTab === 'personal') return wallets.filter(w => w.pocket !== 'kantor')
+    return wallets
+  }, [activeTab, wallets])
+
+  const hasFilters = !!(filterType || filterCat || search || filterWallet || filterDateFrom || filterDateTo)
+  const activeFilterCount = [filterType, filterCat, filterWallet, filterDateFrom || filterDateTo].filter(Boolean).length
+
   const filtered = useMemo(() => baseTxs.filter(t => {
     if (filterType && t.type !== filterType) return false
     if (filterCat && t.category_id !== filterCat) return false
+    if (filterWallet && t.wallet_id !== filterWallet) return false
+    if (filterDateFrom && t.date < filterDateFrom) return false
+    if (filterDateTo && t.date > filterDateTo) return false
     if (search) {
       const q = search.toLowerCase()
-      return t.description?.toLowerCase().includes(q) || t.categories?.name?.toLowerCase().includes(q) || t.wallets?.name?.toLowerCase().includes(q)
+      return t.description?.toLowerCase().includes(q) ||
+        (t as any).categories?.name?.toLowerCase().includes(q) ||
+        (t as any).wallets?.name?.toLowerCase().includes(q)
     }
     return true
-  }), [baseTxs, search, filterType, filterCat])
+  }), [baseTxs, search, filterType, filterCat, filterWallet, filterDateFrom, filterDateTo])
+
   const filteredCats = categories.filter(c => !form.type || c.type === form.type)
   const totalIncome = useMemo(() => filtered.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0), [filtered])
   const totalExpense = useMemo(() => filtered.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0), [filtered])
-  const hasFilters = !!(filterType || filterCat || search)
+
   const personalIncome = useMemo(() => personalTxs.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0), [personalTxs])
   const personalExpense = useMemo(() => personalTxs.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0), [personalTxs])
+  const kantorIncome = useMemo(() => kantorTxs.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0), [kantorTxs])
+  const kantorExpense = useMemo(() => kantorTxs.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0), [kantorTxs])
+
   const kantorWallets = wallets.filter(w => w.pocket === 'kantor')
   const selectedWalletPocket = wallets.find(w => w.id === form.wallet_id)?.pocket
 
-  // ← BARU: helper cari nama trip untuk badge di list transaksi
   function getTripBadge(tx: Transaction) {
     const tripId = (tx as any).trip_id
     if (!tripId) return null
     const trip = trips.find(t => t.id === tripId)
     return trip ? `${trip.emoji} ${trip.name}` : null
+  }
+
+  function resetFilters() {
+    setFilterType('')
+    setFilterCat('')
+    setFilterWallet('')
+    setFilterDateFrom('')
+    setFilterDateTo('')
+    setSearch('')
   }
 
   return (
@@ -241,9 +279,7 @@ export default function TransactionsPage() {
         onClick={() => router.push('/trips')}
         className="w-full card p-3 mb-3 flex items-center gap-3 active:bg-surface-50 transition-colors text-left"
       >
-        <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center text-lg flex-shrink-0">
-          🧳
-        </div>
+        <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center text-lg flex-shrink-0">🧳</div>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-bold text-surface-800">Trip & Healing</p>
           <p className="text-[10px] text-surface-400">Lihat rekap pengeluaran per trip</p>
@@ -255,7 +291,7 @@ export default function TransactionsPage() {
       {pendingReimburse.length > 0 && (
         <div
           className="card p-3 mb-4 bg-amber-50 border border-amber-200 flex items-center gap-3 cursor-pointer"
-          onClick={() => setActiveTab('reimburse')}
+          onClick={() => switchTab('reimburse')}
         >
           <span className="text-xl">🏢</span>
           <div className="flex-1 min-w-0">
@@ -268,13 +304,22 @@ export default function TransactionsPage() {
 
       {/* Tabs */}
       <div className="flex gap-1.5 mb-4 bg-surface-100 p-1 rounded-xl">
-        <button onClick={() => setActiveTab('personal')} className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all ${activeTab === 'personal' ? 'bg-white text-surface-900 shadow-sm' : 'text-surface-500'}`}>
+        <button
+          onClick={() => switchTab('personal')}
+          className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all ${activeTab === 'personal' ? 'bg-white text-surface-900 shadow-sm' : 'text-surface-500'}`}
+        >
           👤 Pribadi
         </button>
-        <button onClick={() => setActiveTab('kantor')} className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all ${activeTab === 'kantor' ? 'bg-white text-surface-900 shadow-sm' : 'text-surface-500'}`}>
+        <button
+          onClick={() => switchTab('kantor')}
+          className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all ${activeTab === 'kantor' ? 'bg-white text-surface-900 shadow-sm' : 'text-surface-500'}`}
+        >
           🏢 Kas Kantor
         </button>
-        <button onClick={() => setActiveTab('reimburse')} className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all relative ${activeTab === 'reimburse' ? 'bg-white text-surface-900 shadow-sm' : 'text-surface-500'}`}>
+        <button
+          onClick={() => switchTab('reimburse')}
+          className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all relative ${activeTab === 'reimburse' ? 'bg-white text-surface-900 shadow-sm' : 'text-surface-500'}`}
+        >
           💼 Reimburse
           {pendingReimburse.length > 0 && (
             <span className="absolute -top-1 -right-1 w-4 h-4 bg-amber-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center">
@@ -297,17 +342,39 @@ export default function TransactionsPage() {
           </div>
         </div>
       )}
-      {activeTab === 'kantor' && kantorWallets.length > 0 && (
-        <div className="flex gap-2 mb-4 overflow-x-auto pb-1">
-          {kantorWallets.map(w => (
-            <div key={w.id} className="card p-3 flex-shrink-0 min-w-[140px]">
-              <p className="text-[10px] font-bold text-purple-600 uppercase mb-1">{w.name}</p>
-              <p className="text-base font-extrabold font-mono text-surface-900">{formatCurrency(Number(w.balance))}</p>
-              <p className="text-[10px] text-surface-400">{kantorTxs.filter(t => t.wallet_id === w.id).length} transaksi</p>
+
+      {activeTab === 'kantor' && (
+        <>
+          {/* Kas Kantor summary cards */}
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <div className="card p-3">
+              <p className="text-[10px] font-bold text-green-600 uppercase mb-1">Pemasukan Kantor</p>
+              <p className="text-base font-extrabold text-green-600 font-mono">{formatCurrency(kantorIncome)}</p>
             </div>
-          ))}
-        </div>
+            <div className="card p-3">
+              <p className="text-[10px] font-bold text-purple-600 uppercase mb-1">Pengeluaran Kantor</p>
+              <p className="text-base font-extrabold text-purple-600 font-mono">{formatCurrency(kantorExpense)}</p>
+            </div>
+          </div>
+          {/* Per-wallet breakdown */}
+          {kantorWallets.length > 0 && (
+            <div className="flex gap-2 mb-4 overflow-x-auto pb-1">
+              {kantorWallets.map(w => (
+                <div
+                  key={w.id}
+                  className={`card p-3 flex-shrink-0 min-w-[140px] cursor-pointer transition-all ${filterWallet === w.id ? 'ring-2 ring-purple-400' : ''}`}
+                  onClick={() => setFilterWallet(filterWallet === w.id ? '' : w.id)}
+                >
+                  <p className="text-[10px] font-bold text-purple-600 uppercase mb-1">{w.name}</p>
+                  <p className="text-base font-extrabold font-mono text-surface-900">{formatCurrency(Number(w.balance))}</p>
+                  <p className="text-[10px] text-surface-400">{kantorTxs.filter(t => t.wallet_id === w.id).length} transaksi</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
+
       {activeTab === 'reimburse' && (
         <div className="grid grid-cols-2 gap-2 mb-4">
           <div className="card p-3 bg-amber-50 border border-amber-200">
@@ -325,43 +392,161 @@ export default function TransactionsPage() {
         </div>
       )}
 
-      {/* Search + filter */}
+      {/* Search + filter toggle */}
       <div className="flex gap-2 mb-3">
-        <input className="input flex-1 text-sm" placeholder="🔍 Cari transaksi..." value={search} onChange={(e) => setSearch(e.target.value)} />
-        <button onClick={() => setShowFilters(!showFilters)} className={`btn min-w-0 px-3 ${(filterType || filterCat) ? 'btn-primary' : 'btn-secondary'}`}>
+        <input
+          className="input flex-1 text-sm"
+          placeholder="🔍 Cari transaksi..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <button
+          onClick={() => setShowFilters(!showFilters)}
+          className={`btn min-w-0 px-3 relative ${activeFilterCount > 0 ? 'btn-primary' : 'btn-secondary'}`}
+        >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h18M6 8h12M9 12h6" />
           </svg>
-          {(filterType || filterCat) && <span className="text-xs">•</span>}
+          {activeFilterCount > 0 && (
+            <span className="absolute -top-1 -right-1 w-4 h-4 bg-white text-blue-600 text-[9px] font-extrabold rounded-full flex items-center justify-center shadow">
+              {activeFilterCount}
+            </span>
+          )}
         </button>
       </div>
+
+      {/* Filter panel — 3 filter rows */}
       {showFilters && (
-        <div className="card p-3 mb-3 flex flex-col sm:flex-row gap-2">
-          <select className="input flex-1 text-sm" value={filterType} onChange={(e) => setFilterType(e.target.value)}>
-            <option value="">Semua Tipe</option>
-            <option value="income">Pemasukan</option>
-            <option value="expense">Pengeluaran</option>
+        <div className="card p-3 mb-3 space-y-2">
+          {/* Row 1: Tipe & Kategori */}
+          <div className="flex gap-2">
+            <select
+              className="input flex-1 text-sm"
+              value={filterType}
+              onChange={(e) => setFilterType(e.target.value)}
+            >
+              <option value="">Semua Tipe</option>
+              <option value="income">💰 Pemasukan</option>
+              <option value="expense">💸 Pengeluaran</option>
+            </select>
+            <select
+              className="input flex-1 text-sm"
+              value={filterCat}
+              onChange={(e) => setFilterCat(e.target.value)}
+            >
+              <option value="">Semua Kategori</option>
+              {categories.map(c => (
+                <option key={c.id} value={c.id}>{c.icon} {c.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Row 2: Wallet */}
+          <select
+            className="input w-full text-sm"
+            value={filterWallet}
+            onChange={(e) => setFilterWallet(e.target.value)}
+          >
+            <option value="">Semua Dompet / Bank</option>
+            {walletOptions.map(w => (
+              <option key={w.id} value={w.id}>
+                {w.pocket === 'kantor' ? '🏢' : w.pocket === 'tabungan' ? '💰' : '👤'} {w.name}
+              </option>
+            ))}
           </select>
-          <select className="input flex-1 text-sm" value={filterCat} onChange={(e) => setFilterCat(e.target.value)}>
-            <option value="">Semua Kategori</option>
-            {categories.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
-          </select>
+
+          {/* Row 3: Tanggal */}
+          <div className="flex gap-2 items-center">
+            <div className="flex-1">
+              <label className="text-[10px] font-bold text-surface-400 uppercase mb-1 block">Dari</label>
+              <input
+                className="input w-full text-sm"
+                type="date"
+                value={filterDateFrom}
+                onChange={(e) => setFilterDateFrom(e.target.value)}
+              />
+            </div>
+            <div className="text-surface-300 text-sm mt-4">—</div>
+            <div className="flex-1">
+              <label className="text-[10px] font-bold text-surface-400 uppercase mb-1 block">Sampai</label>
+              <input
+                className="input w-full text-sm"
+                type="date"
+                value={filterDateTo}
+                onChange={(e) => setFilterDateTo(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Shortcut tanggal */}
+          <div className="flex gap-1.5 flex-wrap">
+            {[
+              { label: 'Bulan ini', action: () => {
+                const now = new Date()
+                setFilterDateFrom(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`)
+                setFilterDateTo(new Date().toISOString().split('T')[0])
+              }},
+              { label: 'Bulan lalu', action: () => {
+                const now = new Date()
+                const first = new Date(now.getFullYear(), now.getMonth()-1, 1)
+                const last = new Date(now.getFullYear(), now.getMonth(), 0)
+                setFilterDateFrom(first.toISOString().split('T')[0])
+                setFilterDateTo(last.toISOString().split('T')[0])
+              }},
+              { label: '7 hari', action: () => {
+                const to = new Date()
+                const from = new Date(); from.setDate(from.getDate()-7)
+                setFilterDateFrom(from.toISOString().split('T')[0])
+                setFilterDateTo(to.toISOString().split('T')[0])
+              }},
+              { label: '30 hari', action: () => {
+                const to = new Date()
+                const from = new Date(); from.setDate(from.getDate()-30)
+                setFilterDateFrom(from.toISOString().split('T')[0])
+                setFilterDateTo(to.toISOString().split('T')[0])
+              }},
+            ].map(s => (
+              <button
+                key={s.label}
+                onClick={s.action}
+                className="text-[10px] font-bold px-2 py-1 rounded-lg bg-surface-100 text-surface-500 hover:bg-surface-200 transition-colors"
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+
           {hasFilters && (
-            <button onClick={() => { setFilterType(''); setFilterCat(''); setSearch('') }} className="btn btn-secondary text-xs">Reset</button>
+            <button onClick={resetFilters} className="btn btn-secondary text-xs w-full">
+              Reset Semua Filter
+            </button>
           )}
         </div>
       )}
+
+      {/* Active filter summary + totals */}
       {hasFilters && (
         <div className="grid grid-cols-2 gap-2 mb-3">
           <div className="card p-3 flex items-center justify-between">
             <span className="text-xs text-green-600 font-bold">Masuk</span>
-            <span className="font-mono font-bold text-sm text-green-600">{new Intl.NumberFormat('id-ID', { notation: 'compact', style: 'currency', currency: 'IDR', maximumFractionDigits: 1 }).format(totalIncome)}</span>
+            <span className="font-mono font-bold text-sm text-green-600">
+              {new Intl.NumberFormat('id-ID', { notation: 'compact', style: 'currency', currency: 'IDR', maximumFractionDigits: 1 }).format(totalIncome)}
+            </span>
           </div>
           <div className="card p-3 flex items-center justify-between">
             <span className="text-xs text-red-500 font-bold">Keluar</span>
-            <span className="font-mono font-bold text-sm text-red-500">{new Intl.NumberFormat('id-ID', { notation: 'compact', style: 'currency', currency: 'IDR', maximumFractionDigits: 1 }).format(totalExpense)}</span>
+            <span className="font-mono font-bold text-sm text-red-500">
+              {new Intl.NumberFormat('id-ID', { notation: 'compact', style: 'currency', currency: 'IDR', maximumFractionDigits: 1 }).format(totalExpense)}
+            </span>
           </div>
         </div>
+      )}
+
+      {/* Result count */}
+      {hasFilters && (
+        <p className="text-[10px] text-surface-400 mb-2 px-1">
+          Menampilkan {filtered.length} dari {baseTxs.length} transaksi
+        </p>
       )}
 
       {/* Transactions List */}
@@ -369,37 +554,45 @@ export default function TransactionsPage() {
         {filtered.length > 0 ? (
           <div className="divide-y divide-surface-100">
             {filtered.map((tx) => {
-              const isKantor = tx.wallets?.pocket === 'kantor'
-              const isPendingReimburse = tx.is_reimbursable && !tx.reimbursed_at
-              const isDoneReimburse = tx.is_reimbursable && !!tx.reimbursed_at
-              const tripBadge = getTripBadge(tx) // ← BARU
+              const isKantor = (tx as any).wallets?.pocket === 'kantor'
+              const isPendingReimburse = (tx as any).is_reimbursable && !(tx as any).reimbursed_at
+              const isDoneReimburse = (tx as any).is_reimbursable && !!(tx as any).reimbursed_at
+              const tripBadge = getTripBadge(tx)
               return (
                 <div key={tx.id} className="flex items-center gap-3 px-4 py-3.5 active:bg-surface-50 transition-colors">
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg flex-shrink-0 cursor-pointer" style={{ background: isKantor ? '#f3e8ff' : tx.type === 'income' ? '#dcfce7' : '#fee2e2' }} onClick={() => openEdit(tx)}>
-                    {isKantor ? '🏢' : tx.categories?.icon || (tx.type === 'income' ? '💰' : '💸')}
+                  <div
+                    className="w-10 h-10 rounded-xl flex items-center justify-center text-lg flex-shrink-0 cursor-pointer"
+                    style={{ background: isKantor ? '#f3e8ff' : tx.type === 'income' ? '#dcfce7' : '#fee2e2' }}
+                    onClick={() => openEdit(tx)}
+                  >
+                    {isKantor ? '🏢' : (tx as any).categories?.icon || (tx.type === 'income' ? '💰' : '💸')}
                   </div>
                   <div className="flex-1 min-w-0 cursor-pointer" onClick={() => openEdit(tx)}>
-                    <p className="text-sm font-semibold text-surface-800 truncate">{tx.description || tx.categories?.name || 'Transaksi'}</p>
+                    <p className="text-sm font-semibold text-surface-800 truncate">
+                      {tx.description || (tx as any).categories?.name || 'Transaksi'}
+                    </p>
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <p className="text-[10px] text-surface-400">{formatDate(tx.date)} · {tx.wallets?.name}</p>
-                      {tx.debt_id && <span className="bg-surface-100 text-surface-500 px-1.5 rounded text-[9px]">🤝 Utang/Piutang</span>}
+                      <p className="text-[10px] text-surface-400">{formatDate(tx.date)} · {(tx as any).wallets?.name}</p>
+                      {(tx as any).debt_id && <span className="bg-surface-100 text-surface-500 px-1.5 rounded text-[9px]">🤝 Utang/Piutang</span>}
                       {isPendingReimburse && <span className="bg-amber-100 text-amber-700 px-1.5 rounded text-[9px] font-bold">⏳ Belum reimburse</span>}
                       {isDoneReimburse && <span className="bg-green-100 text-green-700 px-1.5 rounded text-[9px] font-bold">✅ Sudah reimburse</span>}
-                      {/* ← BARU: badge trip */}
                       {tripBadge && <span className="bg-blue-50 text-blue-700 px-1.5 rounded text-[9px] font-bold">{tripBadge}</span>}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
-                    <p className={`text-sm font-bold font-mono ${tx.type === 'income' ? 'text-green-600' : isKantor ? 'text-purple-600' : 'text-red-500'}`} onClick={() => openEdit(tx)}>
+                    <p
+                      className={`text-sm font-bold font-mono ${tx.type === 'income' ? 'text-green-600' : isKantor ? 'text-purple-600' : 'text-red-500'}`}
+                      onClick={() => openEdit(tx)}
+                    >
                       {tx.type === 'income' ? '+' : '-'}{new Intl.NumberFormat('id-ID', { notation: 'compact', style: 'currency', currency: 'IDR', maximumFractionDigits: 1 }).format(Number(tx.amount))}
                     </p>
-                    {tx.is_reimbursable && (
+                    {(tx as any).is_reimbursable && (
                       <button
                         onClick={() => markReimbursed(tx)}
-                        className={`w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-all ${tx.reimbursed_at ? 'bg-green-100 text-green-600' : 'bg-amber-100 text-amber-600 hover:bg-amber-200'}`}
-                        title={tx.reimbursed_at ? 'Sudah direimburse — klik untuk batal' : 'Tandai sudah direimburse'}
+                        className={`w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-all ${(tx as any).reimbursed_at ? 'bg-green-100 text-green-600' : 'bg-amber-100 text-amber-600 hover:bg-amber-200'}`}
+                        title={(tx as any).reimbursed_at ? 'Sudah direimburse — klik untuk batal' : 'Tandai sudah direimburse'}
                       >
-                        {tx.reimbursed_at ? '✓' : '○'}
+                        {(tx as any).reimbursed_at ? '✓' : '○'}
                       </button>
                     )}
                   </div>
@@ -411,10 +604,14 @@ export default function TransactionsPage() {
           <div className="text-center py-16 text-surface-300">
             <p className="text-4xl mb-2">{activeTab === 'kantor' ? '🏢' : activeTab === 'reimburse' ? '💼' : '📝'}</p>
             <p className="text-sm">
-              {activeTab === 'kantor' ? 'Belum ada transaksi kas kantor' :
+              {hasFilters ? 'Tidak ada transaksi yang cocok dengan filter' :
+               activeTab === 'kantor' ? 'Belum ada transaksi kas kantor' :
                activeTab === 'reimburse' ? 'Tidak ada transaksi reimburse' :
                'Belum ada transaksi pribadi'}
             </p>
+            {hasFilters && (
+              <button onClick={resetFilters} className="mt-3 text-xs text-blue-500 font-bold">Reset filter</button>
+            )}
           </div>
         )}
       </div>
@@ -422,7 +619,7 @@ export default function TransactionsPage() {
       {/* Add/Edit Modal */}
       <Modal open={showAdd} onClose={() => { setShowAdd(false); setEditing(null) }} title={editing ? 'Edit Transaksi' : 'Tambah Transaksi'}>
         <div className="space-y-4">
-          {editing && editing.debt_id && (
+          {editing && (editing as any).debt_id && (
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex gap-2">
               <span>⚠️</span>
               <span>Transaksi ini terhubung ke catatan utang/piutang. Sebaiknya ubah langsung dari halaman Utang & Piutang.</span>
@@ -471,8 +668,6 @@ export default function TransactionsPage() {
             <label className="label">Tanggal</label>
             <input className="input" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
           </div>
-
-          {/* ── BARU: Tag Trip — hanya untuk expense pribadi ── */}
           {form.type === 'expense' && selectedWalletPocket !== 'kantor' && trips.length > 0 && (
             <div>
               <label className="label">🧳 Tag ke Trip (opsional)</label>
@@ -489,31 +684,26 @@ export default function TransactionsPage() {
                 ))}
               </select>
               {form.trip_id && (
-                <p className="text-[10px] text-blue-600 mt-1">
-                  ✓ Transaksi ini akan muncul di ringkasan trip tersebut
-                </p>
+                <p className="text-[10px] text-blue-600 mt-1">✓ Transaksi ini akan muncul di ringkasan trip tersebut</p>
               )}
             </div>
           )}
-
-          {/* Toggle reimburse */}
           {selectedWalletPocket && selectedWalletPocket !== 'kantor' && form.type === 'expense' && (
             <button
-              onClick={() => setForm({ ...form, is_reimbursable: !form.is_reimbursable })}
-              className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all text-left ${form.is_reimbursable ? 'bg-amber-50 border-amber-300' : 'bg-surface-50 border-surface-200'}`}
+              onClick={() => setForm({ ...form, is_reimbursable: !(form as any).is_reimbursable })}
+              className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all text-left ${(form as any).is_reimbursable ? 'bg-amber-50 border-amber-300' : 'bg-surface-50 border-surface-200'}`}
             >
-              <div className={`w-10 h-6 rounded-full transition-all flex-shrink-0 relative ${form.is_reimbursable ? 'bg-amber-500' : 'bg-surface-300'}`}>
-                <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all ${form.is_reimbursable ? 'left-5' : 'left-1'}`} />
+              <div className={`w-10 h-6 rounded-full transition-all flex-shrink-0 relative ${(form as any).is_reimbursable ? 'bg-amber-500' : 'bg-surface-300'}`}>
+                <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all ${(form as any).is_reimbursable ? 'left-5' : 'left-1'}`} />
               </div>
               <div>
-                <p className={`text-xs font-bold ${form.is_reimbursable ? 'text-amber-800' : 'text-surface-600'}`}>
+                <p className={`text-xs font-bold ${(form as any).is_reimbursable ? 'text-amber-800' : 'text-surface-600'}`}>
                   🏢 Ini pengeluaran untuk keperluan kantor
                 </p>
                 <p className="text-[10px] text-surface-400 mt-0.5">Pakai dompet pribadi, nanti reimburse dari kantor</p>
               </div>
             </button>
           )}
-
           {!editing && form.type === 'expense' && form.category_id && isInvestmentCategory(form.category_id) && (
             <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
               <span>📈</span>
