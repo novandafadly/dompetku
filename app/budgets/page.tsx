@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState } from 'react'
 import { supabase, filterPersonalTransactions } from '@/lib/supabase'
 import type { Budget, Category, Transaction } from '@/lib/supabase'
 import { formatCurrency, formatShort, MONTHS } from '@/lib/utils'
@@ -14,27 +14,44 @@ export default function BudgetsPage() {
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState<Budget | null>(null)
   const now = new Date()
+  const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1) // 1–12
+  const [selectedYear, setSelectedYear] = useState(now.getFullYear())
   const [form, setForm] = useState({ category_id: '', amount: '' })
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [selectedMonth, selectedYear])
 
+  // ── Navigasi bulan ────────────────────────────────────────
+  function prevMonth() {
+    if (selectedMonth === 1) { setSelectedMonth(12); setSelectedYear(y => y - 1) }
+    else setSelectedMonth(m => m - 1)
+  }
+
+  function nextMonth() {
+    if (selectedMonth === 12) { setSelectedMonth(1); setSelectedYear(y => y + 1) }
+    else setSelectedMonth(m => m + 1)
+  }
+
+  const isCurrentMonth = selectedMonth === now.getMonth() + 1 && selectedYear === now.getFullYear()
+
+  // ── Load data ─────────────────────────────────────────────
   async function load() {
-    const startOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
+    const startOfMonth = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-01`
+    const endOfMonth = new Date(selectedYear, selectedMonth, 0).toISOString().split('T')[0]
     const [b, c, t] = await Promise.all([
-      supabase.from('budgets').select('*, categories(*)').eq('period_month', now.getMonth() + 1).eq('period_year', now.getFullYear()),
+      supabase.from('budgets').select('*, categories(*)').eq('period_month', selectedMonth).eq('period_year', selectedYear),
       supabase.from('categories').select('*').eq('type', 'expense').order('name'),
-      // FIX: join wallets untuk bisa filter pocket
       supabase.from('transactions')
         .select('*, wallets(pocket)')
         .eq('type', 'expense')
-        .gte('date', startOfMonth),
+        .gte('date', startOfMonth)
+        .lte('date', endOfMonth),
     ])
-    setBudgets(b.data || [])
-    setCategories(c.data || [])
-    // FIX: exclude transaksi dari wallet kantor — tidak masuk anggaran pribadi
-    setTransactions(filterPersonalTransactions(t.data || []))
+    setBudgets((b.data) || [])
+    setCategories((c.data) || [])
+    setTransactions(filterPersonalTransactions((t.data) || []))
   }
 
+  // ── CRUD ──────────────────────────────────────────────────
   function openAdd() {
     setEditing(null)
     setForm({ category_id: '', amount: '' })
@@ -61,12 +78,12 @@ export default function BudgetsPage() {
         user_id: session.user.id,
         category_id: form.category_id,
         amount,
-        period_month: now.getMonth() + 1,
-        period_year: now.getFullYear(),
+        period_month: selectedMonth,
+        period_year: selectedYear,
       })
       if (error) {
         const isDupe = error.message.includes('duplicate key')
-        toast(isDupe ? 'Budget untuk kategori ini sudah ada!' : error.message, '❌')
+        toast(isDupe ? 'Budget untuk kategori ini sudah ada bulan ini!' : error.message, '❌')
         return
       }
       toast('Anggaran ditambahkan!', '🎯')
@@ -83,6 +100,49 @@ export default function BudgetsPage() {
     load()
   }
 
+  // ── Copy dari bulan lalu ──────────────────────────────────
+  async function copyFromLastMonth() {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) return
+
+    const prevM = selectedMonth === 1 ? 12 : selectedMonth - 1
+    const prevY = selectedMonth === 1 ? selectedYear - 1 : selectedYear
+
+    const { data: lastBudgets } = await supabase.from('budgets')
+      .select('category_id, amount')
+      .eq('user_id', session.user.id)
+      .eq('period_month', prevM)
+      .eq('period_year', prevY)
+
+    if (!lastBudgets || lastBudgets.length === 0) {
+      toast('Tidak ada anggaran di bulan sebelumnya', '⚠️')
+      return
+    }
+
+    // Hanya insert kategori yang belum ada di bulan ini
+    const existingCats = new Set(budgets.map(b => b.category_id))
+    const toInsert = lastBudgets
+      .filter(b => !existingCats.has(b.category_id))
+      .map(b => ({
+        user_id: session.user.id,
+        category_id: b.category_id,
+        amount: b.amount,
+        period_month: selectedMonth,
+        period_year: selectedYear,
+      }))
+
+    if (toInsert.length === 0) {
+      toast('Semua kategori sudah ada anggaran bulan ini', 'ℹ️')
+      return
+    }
+
+    const { error } = await supabase.from('budgets').insert(toInsert)
+    if (error) { toast(error.message, '❌'); return }
+    toast(`${toInsert.length} anggaran disalin dari bulan lalu!`, '📋')
+    load()
+  }
+
+  // ── Computed ──────────────────────────────────────────────
   const totalBudget = budgets.reduce((s, b) => s + Number(b.amount), 0)
   const totalSpent = budgets.reduce((s, b) => {
     return s + transactions.filter(t => t.category_id === b.category_id).reduce((ss, t) => ss + Number(t.amount), 0)
@@ -91,12 +151,48 @@ export default function BudgetsPage() {
 
   return (
     <AppShell>
+      {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-extrabold text-surface-900">Anggaran</h1>
-          <p className="text-sm text-surface-400">{MONTHS[now.getMonth()]} {now.getFullYear()}</p>
+          {/* Navigasi bulan */}
+          <div className="flex items-center gap-2 mt-1">
+            <button
+              onClick={prevMonth}
+              className="w-6 h-6 rounded-lg bg-surface-100 hover:bg-surface-200 flex items-center justify-center text-surface-500 text-xs transition-colors"
+            >
+              ←
+            </button>
+            <span className="text-sm font-bold text-surface-700 min-w-[110px] text-center">
+              {MONTHS[selectedMonth - 1]} {selectedYear}
+            </span>
+            <button
+              onClick={nextMonth}
+              className="w-6 h-6 rounded-lg bg-surface-100 hover:bg-surface-200 flex items-center justify-center text-surface-500 text-xs transition-colors"
+            >
+              →
+            </button>
+            {!isCurrentMonth && (
+              <button
+                onClick={() => { setSelectedMonth(now.getMonth() + 1); setSelectedYear(now.getFullYear()) }}
+                className="text-[10px] font-bold text-brand-600 bg-brand-50 px-2 py-0.5 rounded-full"
+              >
+                Hari ini
+              </button>
+            )}
+          </div>
         </div>
-        <button onClick={openAdd} className="btn btn-primary">+ Set Anggaran</button>
+        <div className="flex flex-col items-end gap-1.5">
+          <button onClick={openAdd} className="btn btn-primary text-sm py-2 px-3">+ Set Anggaran</button>
+          {budgets.length === 0 && (
+            <button
+              onClick={copyFromLastMonth}
+              className="text-[10px] font-bold text-surface-500 hover:text-brand-600 transition-colors"
+            >
+              📋 Salin dari bulan lalu
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Summary */}
@@ -124,6 +220,18 @@ export default function BudgetsPage() {
         </div>
       </div>
 
+      {/* Copy from last month — tampil kalau ada budget */}
+      {budgets.length > 0 && (
+        <div className="flex justify-end mb-3">
+          <button
+            onClick={copyFromLastMonth}
+            className="text-xs font-bold text-surface-400 hover:text-brand-600 transition-colors flex items-center gap-1"
+          >
+            📋 Salin kategori dari bulan lalu
+          </button>
+        </div>
+      )}
+
       {/* Budget List */}
       <div className="space-y-3">
         {budgets.map((b) => {
@@ -134,8 +242,8 @@ export default function BudgetsPage() {
             <div key={b.id} className="card p-5 group">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-lg">{b.categories?.icon}</span>
-                  <span className="font-semibold text-surface-800">{b.categories?.name}</span>
+                  <span className="text-lg">{(b as any).categories?.icon}</span>
+                  <span className="font-semibold text-surface-800">{(b as any).categories?.name}</span>
                   {over && <span className="badge bg-red-100 text-red-700">Over Budget!</span>}
                 </div>
                 <div className="flex items-center gap-1">
@@ -159,12 +267,14 @@ export default function BudgetsPage() {
         {budgets.length === 0 && (
           <div className="card text-center py-16 text-surface-300">
             <p className="text-4xl mb-2">🎯</p>
-            <p className="text-sm">Belum ada anggaran. Set anggaran bulanan per kategori!</p>
+            <p className="text-sm">Belum ada anggaran untuk {MONTHS[selectedMonth - 1]} {selectedYear}.</p>
+            <p className="text-xs mt-1">Set anggaran baru atau salin dari bulan lalu.</p>
           </div>
         )}
       </div>
 
-      <Modal open={showModal} onClose={() => { setShowModal(false); setEditing(null) }} title={editing ? 'Edit Anggaran' : 'Set Anggaran'}>
+      {/* Modal tambah/edit */}
+      <Modal open={showModal} onClose={() => { setShowModal(false); setEditing(null) }} title={editing ? 'Edit Anggaran' : `Set Anggaran — ${MONTHS[selectedMonth - 1]} ${selectedYear}`}>
         <div className="space-y-4">
           <div>
             <label className="label">Kategori Pengeluaran</label>
