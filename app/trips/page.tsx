@@ -1,737 +1,589 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
-import type { Session } from '@supabase/supabase-js'
+import type { Transaction, Wallet, Category } from '@/lib/supabase'
+import { formatCurrency, formatDate, formatShort } from '@/lib/utils'
 import AppShell from '@/components/AppShell'
+import Modal from '@/components/Modal'
+import { toast } from '@/components/Toast'
 
-interface Trip {
+type Trip = {
   id: string
+  user_id: string
   name: string
   emoji: string
-  start_date: string
-  end_date: string | null
+  destination: string | null
+  start_date: string | null   // OPTIONAL
+  end_date: string | null     // OPTIONAL
+  budget: number | null
   notes: string | null
   created_at: string
 }
 
-interface TxCategory {
-  name: string
-  icon: string
+type TripForm = {
+  name: string; emoji: string; destination: string
+  start_date: string; end_date: string; budget: string; notes: string
 }
 
-interface TxWallet {
-  name: string
-  pocket: string
-}
+const TRIP_EMOJIS = ['🧳','✈️','🏖️','🏔️','🗺️','🚢','🚗','🚆','🏕️','🌏','🎡','🏟️']
+const emptyTripForm: TripForm = { name:'', emoji:'🧳', destination:'', start_date:'', end_date:'', budget:'', notes:'' }
 
-interface Tx {
-  id: string
-  wallet_id: string
-  category_id: string | null
-  type: 'income' | 'expense'
-  amount: number
-  description: string | null
-  date: string
-  trip_id: string | null
-  categories?: TxCategory | null
-  wallets?: TxWallet | null
-}
-
-interface CatBreakdown {
-  name: string
-  icon: string
-  total: number
-  count: number
-}
-
-interface TripStats {
-  totalExpense: number
-  totalIncome: number
-  breakdown: CatBreakdown[]
-  count: number
-}
-
-function fmtCurrency(n: number): string {
-  return 'Rp ' + Math.abs(n).toLocaleString('id-ID', { maximumFractionDigits: 0 })
-}
-
-function fmtShort(n: number): string {
-  if (n >= 1000000) return 'Rp ' + (n / 1000000).toFixed(1) + 'jt'
-  if (n >= 1000) return 'Rp ' + (n / 1000).toFixed(0) + 'rb'
-  return fmtCurrency(n)
-}
-
-function fmtDateRange(start: string, end: string | null): string {
-  const s = new Date(start)
-  if (!end) return s.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })
-  const e = new Date(end)
-  const mo: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' }
-  if (s.getFullYear() === e.getFullYear()) {
-    if (s.getMonth() === e.getMonth()) {
-      return s.getDate() + '-' + e.getDate() + ' ' + s.toLocaleDateString('id-ID', { month: 'short', year: 'numeric' })
-    }
-    return s.toLocaleDateString('id-ID', mo) + ' - ' + e.toLocaleDateString('id-ID', { ...mo, year: 'numeric' })
-  }
-  return s.toLocaleDateString('id-ID', { ...mo, year: 'numeric' }) + ' - ' + e.toLocaleDateString('id-ID', { ...mo, year: 'numeric' })
-}
-
-function getDays(start: string, end: string | null): number {
-  if (!end) return 1
-  const diff = new Date(end).getTime() - new Date(start).getTime()
-  return Math.max(1, Math.round(diff / 86400000) + 1)
-}
-
-function calcStats(txs: Tx[]): TripStats {
-  const expenses = txs.filter(function(t) { return t.type === 'expense' })
-  const totalExpense = expenses.reduce(function(s, t) { return s + Number(t.amount) }, 0)
-  const totalIncome = txs.filter(function(t) { return t.type === 'income' }).reduce(function(s, t) { return s + Number(t.amount) }, 0)
-  const catMap = new Map<string, CatBreakdown>()
-  expenses.forEach(function(t) {
-    const key = (t.categories && t.categories.name) ? t.categories.name : 'Lainnya'
-    const icon = (t.categories && t.categories.icon) ? t.categories.icon : '📦'
-    const cur = catMap.get(key) || { name: key, icon: icon, total: 0, count: 0 }
-    cur.total += Number(t.amount)
-    cur.count++
-    catMap.set(key, cur)
-  })
-  const breakdown = Array.from(catMap.values()).sort(function(a, b) { return b.total - a.total })
-  return { totalExpense, totalIncome, breakdown, count: expenses.length }
-}
-
-function buildOrQuery(trip: Trip): string {
-  const start = trip.start_date
-  const end = trip.end_date
-  const dateFilter = end
-    ? 'and(date.gte.' + start + ',date.lte.' + end + ')'
-    : 'and(date.gte.' + start + ',date.lte.' + start + ')'
-  return dateFilter + ',trip_id.eq.' + trip.id
-}
-
-function SimpleModal(props: { open: boolean; onClose: () => void; children: React.ReactNode }) {
-  if (!props.open) return null
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40"
-      onClick={props.onClose}
-    >
-      <div
-        className="bg-white w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl p-5 shadow-2xl"
-        onClick={function(e) { e.stopPropagation() }}
-      >
-        {props.children}
-      </div>
-    </div>
-  )
-}
-
-const EMOJI_LIST = [
-  { key: 'airplane', val: '\u2708\uFE0F' },
-  { key: 'beach', val: '\uD83C\uDFD6\uFE0F' },
-  { key: 'mountain', val: '\u26F0\uFE0F' },
-  { key: 'tent', val: '\uD83C\uDFD5\uFE0F' },
-  { key: 'car', val: '\uD83D\uDE97' },
-  { key: 'train', val: '\uD83D\uDE82' },
-  { key: 'ship', val: '\uD83D\uDEF3\uFE0F' },
-  { key: 'globe', val: '\uD83C\uDF0F' },
-  { key: 'luggage', val: '\uD83E\uDDF3' },
-]
-
-export default function TripPage() {
-  const [session, setSession] = useState<Session | null>(null)
+export default function TripsPage() {
   const [trips, setTrips] = useState<Trip[]>([])
+  const [transactions, setTransactions] = useState<Transaction[]>([])
+  const [wallets, setWallets] = useState<Wallet[]>([])
+  const [categories, setCategories] = useState<Category[]>([])
+  // excludedMap: trip_id -> Set of excluded transaction_ids (DB-persisted)
+  const [excludedMap, setExcludedMap] = useState<Record<string, Set<string>>>({})
+
+  const [showTripModal, setShowTripModal] = useState(false)
+  const [editingTrip, setEditingTrip] = useState<Trip | null>(null)
   const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null)
-  const [txs, setTxs] = useState<Tx[]>([])
-  const [allTxs, setAllTxs] = useState<Tx[]>([])
+  const [showDetail, setShowDetail] = useState(false)
+  const [showExcludeModal, setShowExcludeModal] = useState(false)
+  const [showAddTxModal, setShowAddTxModal] = useState(false)
+  const [tripForm, setTripForm] = useState<TripForm>(emptyTripForm)
   const [loading, setLoading] = useState(true)
-  const [txLoading, setTxLoading] = useState(false)
-  const [activeTab, setActiveTab] = useState<'summary' | 'transactions'>('summary')
-  const [compareMode, setCompareMode] = useState(false)
-  const [compareTrip, setCompareTrip] = useState<Trip | null>(null)
-  const [compareTxs, setCompareTxs] = useState<Tx[]>([])
-  const [showForm, setShowForm] = useState(false)
-  const [showTagModal, setShowTagModal] = useState(false)
-  const [editTrip, setEditTrip] = useState<Trip | null>(null)
-  const [delConfirm, setDelConfirm] = useState<Trip | null>(null)
-  const [formName, setFormName] = useState('')
-  const [formEmoji, setFormEmoji] = useState('airplane')
-  const [formStart, setFormStart] = useState('')
-  const [formEnd, setFormEnd] = useState('')
-  const [formNotes, setFormNotes] = useState('')
 
-  useEffect(function() {
-    supabase.auth.getSession().then(function(res) { setSession(res.data.session) })
-    const sub = supabase.auth.onAuthStateChange(function(_, s) { setSession(s) })
-    return function() { sub.data.subscription.unsubscribe() }
-  }, [])
+  const [addTxForm, setAddTxForm] = useState({
+    wallet_id: '', category_id: '', amount: '', description: '',
+    date: new Date().toISOString().split('T')[0],
+  })
 
-  const loadTrips = useCallback(async function() {
+  useEffect(() => { load() }, [])
+
+  async function load() {
+    const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
-    setLoading(true)
-    const res = await supabase
-      .from('trips')
-      .select('*')
-      .eq('user_id', session.user.id)
-      .order('start_date', { ascending: false })
-    setTrips(res.data || [])
-    setLoading(false)
-  }, [session])
 
-  useEffect(function() { loadTrips() }, [loadTrips])
+    const [tr, tx, w, c, excl] = await Promise.all([
+      supabase.from('trips').select('*').eq('user_id', session.user.id).order('created_at', { ascending: false }),
+      supabase.from('transactions').select('*, categories(*), wallets(*)').order('date', { ascending: false }).limit(500),
+      supabase.from('wallets').select('*').eq('is_active', true).order('name'),
+      supabase.from('categories').select('*').order('name'),
+      supabase.from('trip_excluded_transactions').select('trip_id, transaction_id').eq('user_id', session.user.id),
+    ])
 
-  const loadTripTxs = useCallback(async function(trip: Trip) {
-    if (!session) return
-    setTxLoading(true)
-    const orQuery = buildOrQuery(trip)
-    const res = await supabase
-      .from('transactions')
-      .select('*, categories(name, icon), wallets(name, pocket)')
-      .eq('user_id', session.user.id)
-      .or(orQuery)
-      .order('date', { ascending: false })
-    const data = (res.data || []) as Tx[]
-    const seen = new Set<string>()
-    const deduped = data.filter(function(t) {
-      if (seen.has(t.id)) return false
-      seen.add(t.id)
-      return true
-    }).filter(function(t) {
-      return !(t.wallets && t.wallets.pocket === 'kantor')
-    })
-    setTxs(deduped)
-    setTxLoading(false)
-  }, [session])
+    setTrips(tr.data || [])
+    setTransactions((tx.data as any) || [])
+    setWallets(w.data || [])
+    setCategories(c.data || [])
 
-  useEffect(function() {
-    if (selectedTrip) loadTripTxs(selectedTrip)
-  }, [selectedTrip, loadTripTxs])
-
-  useEffect(function() {
-    async function load() {
-      if (!compareTrip || !session) return
-      const orQuery = buildOrQuery(compareTrip)
-      const res = await supabase
-        .from('transactions')
-        .select('*, categories(name, icon), wallets(name, pocket)')
-        .eq('user_id', session.user.id)
-        .or(orQuery)
-        .order('date', { ascending: false })
-      const data = (res.data || []) as Tx[]
-      const seen = new Set<string>()
-      const deduped = data.filter(function(t) {
-        if (seen.has(t.id)) return false
-        seen.add(t.id)
-        return true
-      })
-      setCompareTxs(deduped)
+    // Build excludedMap from DB
+    const map: Record<string, Set<string>> = {}
+    for (const row of (excl.data || [])) {
+      if (!map[row.trip_id]) map[row.trip_id] = new Set()
+      map[row.trip_id].add(row.transaction_id)
     }
-    load()
-  }, [compareTrip, session])
+    setExcludedMap(map)
+    setLoading(false)
+  }
 
-  async function loadAllTxs() {
+  // ── Which transactions belong to a trip ───────────────────
+  // Includes: explicitly tagged (trip_id=trip.id) OR date in range
+  // Excludes: overridden via trip_excluded_transactions
+  function getTripTransactions(trip: Trip): Transaction[] {
+    const excluded = excludedMap[trip.id] || new Set<string>()
+    return transactions.filter(tx => {
+      if (excluded.has(tx.id)) return false
+      if ((tx as any).trip_id === trip.id) return true
+      if ((tx as any).trip_id && (tx as any).trip_id !== trip.id) return false
+      if (tx.type !== 'expense') return false
+      if ((tx as any).wallets?.pocket === 'kantor') return false
+      if (trip.start_date || trip.end_date) {
+        if (trip.start_date && tx.date < trip.start_date) return false
+        if (trip.end_date && tx.date > trip.end_date) return false
+        return true
+      }
+      return false
+    })
+  }
+
+  // ── Toggle exclude — persisted to DB ──────────────────────
+  async function toggleExclude(tripId: string, txId: string) {
+    const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
-    const res = await supabase
-      .from('transactions')
-      .select('*, categories(name, icon), wallets(name, pocket)')
-      .eq('user_id', session.user.id)
-      .eq('type', 'expense')
-      .order('date', { ascending: false })
-      .limit(100)
-    setAllTxs((res.data || []) as Tx[])
+    const isExcluded = (excludedMap[tripId] || new Set()).has(txId)
+
+    if (isExcluded) {
+      await supabase.from('trip_excluded_transactions')
+        .delete().eq('trip_id', tripId).eq('transaction_id', txId)
+      toast('Transaksi dimasukkan kembali ke trip', '✅')
+    } else {
+      await supabase.from('trip_excluded_transactions')
+        .insert({ trip_id: tripId, transaction_id: txId, user_id: session.user.id })
+      toast('Transaksi dikecualikan dari trip', '🚫')
+    }
+
+    // Optimistic UI update
+    setExcludedMap(prev => {
+      const next = { ...prev }
+      if (!next[tripId]) next[tripId] = new Set()
+      else next[tripId] = new Set(next[tripId])
+      if (isExcluded) next[tripId].delete(txId)
+      else next[tripId].add(txId)
+      return next
+    })
   }
 
-  function openAdd() {
-    setEditTrip(null)
-    setFormName('')
-    setFormEmoji('airplane')
-    setFormStart('')
-    setFormEnd('')
-    setFormNotes('')
-    setShowForm(true)
-  }
+  // ── Trip CRUD ─────────────────────────────────────────────
+  function openAddTrip() { setEditingTrip(null); setTripForm(emptyTripForm); setShowTripModal(true) }
 
-  function openEdit(trip: Trip) {
-    setEditTrip(trip)
-    setFormName(trip.name)
-    const found = EMOJI_LIST.find(function(e) { return e.val === trip.emoji })
-    setFormEmoji(found ? found.key : 'airplane')
-    setFormStart(trip.start_date)
-    setFormEnd(trip.end_date || '')
-    setFormNotes(trip.notes || '')
-    setShowForm(true)
+  function openEditTrip(trip: Trip) {
+    setEditingTrip(trip)
+    setTripForm({
+      name: trip.name, emoji: trip.emoji || '🧳',
+      destination: trip.destination || '',
+      start_date: trip.start_date || '', end_date: trip.end_date || '',
+      budget: trip.budget ? String(trip.budget) : '', notes: trip.notes || '',
+    })
+    setShowTripModal(true)
   }
 
   async function saveTrip() {
-    if (!session || !formName || !formStart) return
-    const found = EMOJI_LIST.find(function(e) { return e.key === formEmoji })
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) return
+    if (!tripForm.name.trim()) { toast('Nama trip wajib diisi!', '⚠️'); return }
+
     const payload = {
-      user_id: session.user.id,
-      name: formName.trim(),
-      emoji: found ? found.val : EMOJI_LIST[0].val,
-      start_date: formStart,
-      end_date: formEnd || null,
-      notes: formNotes || null,
+      name: tripForm.name.trim(), emoji: tripForm.emoji,
+      destination: tripForm.destination || null,
+      start_date: tripForm.start_date || null,
+      end_date: tripForm.end_date || null,
+      budget: Number(tripForm.budget) || null,
+      notes: tripForm.notes || null,
     }
-    if (editTrip) {
-      await supabase.from('trips').update(payload).eq('id', editTrip.id)
+
+    if (editingTrip) {
+      const { error } = await supabase.from('trips').update(payload).eq('id', editingTrip.id)
+      if (error) { toast(error.message, '❌'); return }
+      toast('Trip diperbarui!', '✅')
     } else {
-      await supabase.from('trips').insert(payload)
+      const { error } = await supabase.from('trips').insert({ ...payload, user_id: session.user.id })
+      if (error) { toast(error.message, '❌'); return }
+      toast('Trip ditambahkan!', '🧳')
     }
-    setShowForm(false)
-    loadTrips()
+    setShowTripModal(false); setEditingTrip(null); load()
   }
 
-  async function deleteTrip(trip: Trip) {
-    await supabase.from('trips').delete().eq('id', trip.id)
-    setDelConfirm(null)
-    if (selectedTrip && selectedTrip.id === trip.id) setSelectedTrip(null)
-    loadTrips()
+  async function deleteTrip(id: string) {
+    if (!confirm('Hapus trip ini? Transaksi yang ditag tidak akan terhapus.')) return
+    // ON DELETE CASCADE hapus trip_excluded_transactions otomatis
+    await supabase.from('trips').delete().eq('id', id)
+    setExcludedMap(prev => { const next = { ...prev }; delete next[id]; return next })
+    if (selectedTrip?.id === id) setSelectedTrip(null)
+    toast('Trip dihapus', '🗑️'); load()
   }
 
-  async function toggleTag(tx: Tx) {
-    if (!selectedTrip) return
-    const isTagged = tx.trip_id === selectedTrip.id
-    await supabase
-      .from('transactions')
-      .update({ trip_id: isTagged ? null : selectedTrip.id })
-      .eq('id', tx.id)
-    loadTripTxs(selectedTrip)
-    loadAllTxs()
+  function openDetail(trip: Trip) { setSelectedTrip(trip); setShowDetail(true) }
+
+  // ── Add manual tx to trip ─────────────────────────────────
+  async function saveAddTx() {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session || !selectedTrip) return
+    const amount = Number(addTxForm.amount)
+    if (!amount || !addTxForm.wallet_id) { toast('Lengkapi jumlah & dompet!', '⚠️'); return }
+
+    const { error } = await supabase.from('transactions').insert({
+      user_id: session.user.id, wallet_id: addTxForm.wallet_id,
+      category_id: addTxForm.category_id || null, type: 'expense', amount,
+      description: addTxForm.description || null, date: addTxForm.date,
+      trip_id: selectedTrip.id,
+    })
+    if (error) { toast(error.message, '❌'); return }
+    toast('Pengeluaran trip dicatat!', '💸')
+    setShowAddTxModal(false)
+    setAddTxForm({ wallet_id:'', category_id:'', amount:'', description:'', date: new Date().toISOString().split('T')[0] })
+    load()
+    setTimeout(() => setShowDetail(true), 400)
   }
 
-  const stats = selectedTrip ? calcStats(txs) : null
-  const compareStats = compareTrip ? calcStats(compareTxs) : null
-  const days = selectedTrip ? getDays(selectedTrip.start_date, selectedTrip.end_date) : 1
-  const compareDays = compareTrip ? getDays(compareTrip.start_date, compareTrip.end_date) : 1
+  // ── Status ────────────────────────────────────────────────
+  function tripStatus(trip: Trip): 'upcoming'|'ongoing'|'done'|'nodates' {
+    if (!trip.start_date && !trip.end_date) return 'nodates'
+    const today = new Date().toISOString().split('T')[0]
+    if (trip.start_date && trip.start_date > today) return 'upcoming'
+    if (!trip.end_date || trip.end_date >= today) return 'ongoing'
+    return 'done'
+  }
+
+  function StatusBadge({ trip }: { trip: Trip }) {
+    const s = tripStatus(trip)
+    const cfg = {
+      upcoming: { cls: 'bg-blue-100 text-blue-700', label: '📅 Upcoming' },
+      ongoing:  { cls: 'bg-green-100 text-green-700', label: '🟢 Berlangsung' },
+      done:     { cls: 'bg-surface-100 text-surface-500', label: '✓ Selesai' },
+      nodates:  { cls: 'bg-amber-100 text-amber-700', label: '🔖 Open Trip' },
+    }
+    return <span className={`badge ${cfg[s].cls}`}>{cfg[s].label}</span>
+  }
+
+  // ── Detail data ───────────────────────────────────────────
+  const detailTxs = useMemo(() =>
+    selectedTrip ? getTripTransactions(selectedTrip) : [],
+    [selectedTrip, transactions, excludedMap]
+  )
+  const detailTotal = useMemo(() => detailTxs.reduce((s,t) => s + Number(t.amount), 0), [detailTxs])
+
+  const expByCat = useMemo(() => {
+    const map: Record<string, {name:string; icon:string; value:number}> = {}
+    detailTxs.forEach(t => {
+      const key = (t as any).categories?.name || 'Lainnya'
+      if (!map[key]) map[key] = { name:key, icon:(t as any).categories?.icon||'📦', value:0 }
+      map[key].value += Number(t.amount)
+    })
+    return Object.values(map).sort((a,b) => b.value - a.value)
+  }, [detailTxs])
+
+  // All date-range txs (including excluded) for override modal
+  const allRangeTxs = useMemo(() => {
+    if (!selectedTrip) return []
+    return transactions.filter(tx => {
+      if (tx.type !== 'expense') return false
+      if ((tx as any).wallets?.pocket === 'kantor') return false
+      if ((tx as any).trip_id === selectedTrip.id) return true
+      if ((tx as any).trip_id && (tx as any).trip_id !== selectedTrip.id) return false
+      if (selectedTrip.start_date || selectedTrip.end_date) {
+        if (selectedTrip.start_date && tx.date < selectedTrip.start_date) return false
+        if (selectedTrip.end_date && tx.date > selectedTrip.end_date) return false
+        return true
+      }
+      return false
+    })
+  }, [selectedTrip, transactions])
+
+  const expenseCategories = categories.filter(c => c.type === 'expense')
+  const personalWallets = wallets.filter(w => w.pocket !== 'kantor')
+
+  function dateRangeHint() {
+    if (!tripForm.start_date && !tripForm.end_date)
+      return '🔖 Tanpa tanggal: hanya transaksi yang ditag manual yang dihitung.'
+    if (tripForm.start_date && !tripForm.end_date)
+      return '📅 Semua transaksi mulai tanggal ini masuk otomatis (bisa di-exclude).'
+    return '📅 Transaksi di rentang tanggal ini masuk otomatis (bisa di-exclude).'
+  }
 
   return (
     <AppShell>
-      <div className="max-w-2xl mx-auto">
-
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h1 className="text-xl font-extrabold text-surface-900">Trip &amp; Healing</h1>
-            <p className="text-xs text-surface-400">{trips.length} trip tercatat</p>
-          </div>
-          <button onClick={openAdd} className="btn btn-primary py-2 px-4 text-sm">
-            + Buat Trip
-          </button>
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-extrabold text-surface-900">Trip & Healing</h1>
+          <p className="text-xs text-surface-400">{trips.length} trip tercatat</p>
         </div>
-
-        {loading && (
-          <div className="text-center py-12 text-surface-400 text-sm">Memuat...</div>
-        )}
-
-        {!loading && trips.length === 0 && (
-          <div className="text-center py-16">
-            <p className="text-4xl mb-3">🗺️</p>
-            <p className="text-surface-400 text-sm">Belum ada trip. Yuk catat perjalananmu!</p>
-          </div>
-        )}
-
-        {!loading && trips.length > 0 && (
-          <div className="space-y-2 mb-4">
-            {trips.map(function(trip) {
-              const isSelected = selectedTrip !== null && selectedTrip.id === trip.id
-              return (
-                <div
-                  key={trip.id}
-                  onClick={function() { setSelectedTrip(isSelected ? null : trip) }}
-                  className={'card p-3 cursor-pointer transition-all ' + (isSelected ? 'ring-2 ring-brand-500' : '')}
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="text-2xl">{trip.emoji}</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-sm text-surface-800 truncate">{trip.name}</p>
-                      <p className="text-[11px] text-surface-400">
-                        {fmtDateRange(trip.start_date, trip.end_date)} &middot; {getDays(trip.start_date, trip.end_date)} hari
-                      </p>
-                    </div>
-                    <div className="flex gap-1">
-                      <button
-                        onClick={function(e) { e.stopPropagation(); openEdit(trip) }}
-                        className="p-1 text-surface-400 hover:text-surface-700"
-                      >
-                        ✏️
-                      </button>
-                      <button
-                        onClick={function(e) { e.stopPropagation(); setDelConfirm(trip) }}
-                        className="p-1 text-surface-400 hover:text-red-500"
-                      >
-                        🗑️
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-
-        {selectedTrip && (          <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <h2 className="text-base font-bold text-surface-900 flex-1">
-                {selectedTrip.emoji} {selectedTrip.name}
-              </h2>
-              <button
-                onClick={function() {
-                  const next = !compareMode
-                  setCompareMode(next)
-                  if (!next) { setCompareTrip(null); setCompareTxs([]) }
-                }}
-                className={'btn-ghost text-xs px-2 py-1 ' + (compareMode ? 'text-brand-600' : '')}
-              >
-                {compareMode ? 'Tutup Compare' : 'Compare'}
-              </button>
-            </div>
-
-            {compareMode && (
-              <div>
-                <label className="label text-xs">Bandingkan dengan:</label>
-                <select
-                  className="input text-sm"
-                  value={compareTrip ? compareTrip.id : ''}
-                  onChange={function(e) {
-                    const found = trips.find(function(x) { return x.id === e.target.value })
-                    setCompareTrip(found || null)
-                  }}
-                >
-                  <option value="">-- Pilih trip --</option>
-                  {trips.filter(function(t) { return t.id !== selectedTrip.id }).map(function(t) {
-                    return <option key={t.id} value={t.id}>{t.emoji} {t.name}</option>
-                  })}
-                </select>
-              </div>
-            )}
-
-            <div className="flex gap-1 bg-surface-100 p-1 rounded-xl">
-              <button
-                onClick={function() { setActiveTab('summary') }}
-                className={'flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all ' + (activeTab === 'summary' ? 'bg-brand-600 text-white' : 'text-surface-500')}
-              >
-                Ringkasan
-              </button>
-              <button
-                onClick={function() { setActiveTab('transactions') }}
-                className={'flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all ' + (activeTab === 'transactions' ? 'bg-brand-600 text-white' : 'text-surface-500')}
-              >
-                Transaksi
-              </button>
-            </div>
-
-            {txLoading && (
-              <div className="text-center py-8 text-sm text-surface-400">Memuat transaksi...</div>
-            )}
-
-            {!txLoading && activeTab === 'summary' && stats !== null && (
-              <SummarySection
-                trip={selectedTrip}
-                stats={stats}
-                days={days}
-                compareTrip={compareTrip}
-                compareStats={compareStats}
-                compareDays={compareDays}
-              />
-            )}
-
-            {!txLoading && activeTab === 'transactions' && (
-              <TxSection
-                txs={txs}
-                trip={selectedTrip}
-                onTagPress={function() { loadAllTxs(); setShowTagModal(true) }}
-              />
-            )}
-          </div>
-        )}
-
+        <button onClick={openAddTrip} className="btn btn-primary py-2.5 px-4 text-sm">+ Trip</button>
       </div>
 
-      <SimpleModal open={showForm} onClose={function() { setShowForm(false) }}>
-        <h2 className="font-bold text-base text-surface-900 mb-4">
-          {editTrip ? 'Edit Trip' : 'Buat Trip Baru'}
-        </h2>
-        <div className="space-y-3">
-          <div>
-            <label className="label">Ikon</label>
-            <div className="flex flex-wrap gap-2 mt-1">
-              {EMOJI_LIST.map(function(e) {
-                return (
-                  <button
-                    key={e.key}
-                    onClick={function() { setFormEmoji(e.key) }}
-                    className={'text-xl p-1.5 rounded-lg border-2 transition-all ' + (formEmoji === e.key ? 'border-brand-500 bg-brand-50' : 'border-transparent')}
-                  >
-                    {e.val}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-          <div>
-            <label className="label">Nama Trip</label>
-            <input
-              className="input"
-              placeholder="contoh: Liburan Bali 2025"
-              value={formName}
-              onChange={function(e) { setFormName(e.target.value) }}
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="label">Tanggal Mulai</label>
-              <input
-                type="date"
-                className="input"
-                value={formStart}
-                onChange={function(e) { setFormStart(e.target.value) }}
-              />
-            </div>
-            <div>
-              <label className="label">Tanggal Selesai</label>
-              <input
-                type="date"
-                className="input"
-                value={formEnd}
-                onChange={function(e) { setFormEnd(e.target.value) }}
-              />
-            </div>
-          </div>
-          <div>
-            <label className="label">Catatan (opsional)</label>
-            <input
-              className="input"
-              placeholder="Destinasi, tujuan, dll..."
-              value={formNotes}
-              onChange={function(e) { setFormNotes(e.target.value) }}
-            />
-          </div>
-          <button
-            onClick={saveTrip}
-            disabled={!formName || !formStart}
-            className="btn btn-primary w-full"
-          >
-            {editTrip ? 'Simpan Perubahan' : 'Buat Trip'}
-          </button>
+      {loading ? (
+        <div className="space-y-4">
+          {[...Array(3)].map((_,i) => <div key={i} className="card p-5 h-28 animate-pulse bg-surface-100" />)}
         </div>
-      </SimpleModal>
+      ) : trips.length > 0 ? (
+        <div className="space-y-3">
+          {trips.map(trip => {
+            const tripTxs = getTripTransactions(trip)
+            const total = tripTxs.reduce((s,t) => s + Number(t.amount), 0)
+            const budgetPct = trip.budget && total > 0 ? Math.min((total / Number(trip.budget)) * 100, 100) : 0
+            const over = trip.budget && total > Number(trip.budget)
+            const excCount = (excludedMap[trip.id] || new Set()).size
 
-      <SimpleModal open={showTagModal} onClose={function() { setShowTagModal(false) }}>
-        <h2 className="font-bold text-sm text-surface-900 mb-1">Tag Transaksi Manual</h2>
-        <p className="text-[11px] text-surface-400 mb-3">
-          Tambah transaksi di luar rentang tanggal trip ini.
-        </p>
-        <div className="space-y-2 max-h-72 overflow-y-auto">
-          {allTxs.map(function(tx) {
-            if (!selectedTrip) return null
-            const inRange = tx.date >= selectedTrip.start_date &&
-              (selectedTrip.end_date === null || tx.date <= selectedTrip.end_date)
-            const isTagged = tx.trip_id === selectedTrip.id
-            if (inRange && !isTagged) return null
             return (
-              <div key={tx.id} className="flex items-center gap-2 p-2 rounded-lg bg-surface-50">
-                <span className="text-base">{tx.categories ? tx.categories.icon : '📦'}</span>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-surface-800 truncate">
-                    {tx.description || (tx.categories ? tx.categories.name : 'Transaksi')}
-                  </p>
-                  <p className="text-[10px] text-surface-400">{tx.date} &middot; {fmtCurrency(Number(tx.amount))}</p>
+              <div key={trip.id} className="card p-4 cursor-pointer active:bg-surface-50 transition-colors" onClick={() => openDetail(trip)}>
+                <div className="flex items-start gap-3 mb-3">
+                  <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-2xl flex-shrink-0">{trip.emoji}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                      <p className="text-sm font-bold text-surface-900">{trip.name}</p>
+                      <StatusBadge trip={trip} />
+                    </div>
+                    {trip.destination && <p className="text-xs text-surface-500 mb-0.5">📍 {trip.destination}</p>}
+                    <p className="text-[10px] text-surface-400">
+                      {trip.start_date && trip.end_date ? `${formatDate(trip.start_date)} – ${formatDate(trip.end_date)}`
+                        : trip.start_date ? `Mulai ${formatDate(trip.start_date)}`
+                        : trip.end_date ? `Sampai ${formatDate(trip.end_date)}`
+                        : 'Tanggal fleksibel'}
+                      {excCount > 0 && <span className="ml-2 text-amber-500">· {excCount} dikecualikan</span>}
+                    </p>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="text-base font-extrabold font-mono text-surface-900">{formatShort(total)}</p>
+                    <p className="text-[10px] text-surface-400">{tripTxs.length} transaksi</p>
+                  </div>
                 </div>
-                <button
-                  onClick={function() { toggleTag(tx) }}
-                  className={'text-xs px-2 py-1 rounded-lg font-semibold transition-all ' + (isTagged ? 'bg-brand-100 text-brand-700' : 'bg-surface-200 text-surface-500')}
-                >
-                  {isTagged ? 'Tagged' : '+ Tag'}
-                </button>
+                {trip.budget && (
+                  <div>
+                    <div className="flex justify-between text-[10px] mb-1">
+                      <span className={`font-semibold ${over ? 'text-red-500' : 'text-surface-500'}`}>
+                        {over ? '⚠️ Over budget!' : `Budget: ${formatShort(Number(trip.budget))}`}
+                      </span>
+                      <span className="text-surface-400">{budgetPct.toFixed(0)}%</span>
+                    </div>
+                    <div className="progress-bar">
+                      <div className="progress-fill" style={{ width:`${budgetPct}%`, background: over?'#ef4444':budgetPct>75?'#f59e0b':'#22c55e' }} />
+                    </div>
+                  </div>
+                )}
               </div>
             )
           })}
         </div>
-        <button onClick={function() { setShowTagModal(false) }} className="btn btn-primary w-full mt-3">
-          Selesai
-        </button>
-      </SimpleModal>
-
-      <SimpleModal open={delConfirm !== null} onClose={function() { setDelConfirm(null) }}>
-        <p className="text-sm font-semibold text-surface-900 mb-1">
-          Hapus trip {delConfirm ? '"' + delConfirm.name + '"' : ''}?
-        </p>
-        <p className="text-xs text-surface-400 mb-4">
-          Data trip dihapus. Transaksi yang ditag tidak ikut terhapus.
-        </p>
-        <div className="flex gap-2">
-          <button onClick={function() { setDelConfirm(null) }} className="btn-ghost flex-1">Batal</button>
-          <button
-            onClick={function() { if (delConfirm) deleteTrip(delConfirm) }}
-            className="flex-1 py-2 rounded-xl bg-red-500 text-white text-sm font-semibold"
-          >
-            Hapus
-          </button>
-        </div>
-      </SimpleModal>
-
-    </AppShell>
-  )
-}
-
-function SummarySection(props: {
-  trip: Trip
-  stats: TripStats
-  days: number
-  compareTrip: Trip | null
-  compareStats: TripStats | null
-  compareDays: number
-}) {
-  const perDay = props.days > 0 ? props.stats.totalExpense / props.days : 0
-  const comparePerDay = props.compareDays > 0 && props.compareStats ? props.compareStats.totalExpense / props.compareDays : 0
-  const hasCompare = props.compareTrip !== null && props.compareStats !== null
-
-  return (
-    <div className="space-y-3">
-      <div className={hasCompare ? 'grid grid-cols-2 gap-2' : ''}>
-        <StatCard trip={props.trip} stats={props.stats} days={props.days} perDay={perDay} primary={true} />
-        {hasCompare && props.compareStats && props.compareTrip && (
-          <StatCard trip={props.compareTrip} stats={props.compareStats} days={props.compareDays} perDay={comparePerDay} primary={false} />
-        )}
-      </div>
-
-      {hasCompare && props.compareStats && (
-        <div className="card p-3 bg-blue-50 border border-blue-200">
-          <p className="text-[11px] font-bold text-blue-700 uppercase mb-2">Selisih</p>
-          <DiffRow label="Total Expense" a={props.stats.totalExpense} b={props.compareStats.totalExpense} />
-          <DiffRow label="Per Hari" a={perDay} b={comparePerDay} />
+      ) : (
+        <div className="card text-center py-20 text-surface-300">
+          <p className="text-5xl mb-3">🧳</p>
+          <p className="font-semibold text-surface-500">Belum ada trip</p>
+          <p className="text-sm mt-1">Buat trip untuk tracking pengeluaran perjalanan</p>
         </div>
       )}
 
-      {props.stats.breakdown.length > 0 && (
-        <div className="card p-3">
-          <p className="text-[11px] font-bold text-surface-400 uppercase mb-3">Breakdown Kategori</p>
-          <div className="space-y-2">
-            {props.stats.breakdown.map(function(cat, i) {
-              const pct = props.stats.totalExpense > 0 ? (cat.total / props.stats.totalExpense) * 100 : 0
-              return (
-                <div key={i}>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-sm">{cat.icon}</span>
-                    <span className="text-xs text-surface-800 flex-1">{cat.name}</span>
-                    <span className="text-xs font-semibold font-mono text-surface-800">{fmtShort(cat.total)}</span>
-                    <span className="text-[10px] text-surface-400 w-8 text-right">{pct.toFixed(0)}%</span>
-                  </div>
-                  <div className="h-1.5 bg-surface-200 rounded-full overflow-hidden">
-                    <div className="h-full bg-brand-500 rounded-full" style={{ width: pct + '%' }} />
-                  </div>
+      {/* ── Add/Edit Trip Modal ── */}
+      <Modal open={showTripModal} onClose={() => { setShowTripModal(false); setEditingTrip(null) }} title={editingTrip ? 'Edit Trip' : 'Tambah Trip'}>
+        <div className="space-y-4">
+          <div>
+            <label className="label">Emoji</label>
+            <div className="flex flex-wrap gap-2">
+              {TRIP_EMOJIS.map(e => (
+                <button key={e} onClick={() => setTripForm({...tripForm, emoji:e})}
+                  className={`w-10 h-10 text-xl rounded-xl flex items-center justify-center transition-all ${tripForm.emoji===e?'bg-brand-100 ring-2 ring-brand-400':'hover:bg-surface-100'}`}>
+                  {e}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="label">Nama Trip</label>
+            <input className="input" placeholder="mis. Bali Trip, Family Vacation" value={tripForm.name} onChange={e => setTripForm({...tripForm, name:e.target.value})} />
+          </div>
+          <div>
+            <label className="label">Destinasi <span className="text-surface-400 font-normal">(opsional)</span></label>
+            <input className="input" placeholder="mis. Bali, Yogyakarta, Singapore" value={tripForm.destination} onChange={e => setTripForm({...tripForm, destination:e.target.value})} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Tgl Mulai <span className="text-surface-400 font-normal text-[10px]">(opsional)</span></label>
+              <input className="input" type="date" value={tripForm.start_date} onChange={e => setTripForm({...tripForm, start_date:e.target.value})} />
+            </div>
+            <div>
+              <label className="label">Tgl Selesai <span className="text-surface-400 font-normal text-[10px]">(opsional)</span></label>
+              <input className="input" type="date" value={tripForm.end_date} min={tripForm.start_date||undefined} onChange={e => setTripForm({...tripForm, end_date:e.target.value})} />
+            </div>
+          </div>
+          <p className="text-[10px] text-surface-400 -mt-2 px-1">{dateRangeHint()}</p>
+          <div>
+            <label className="label">Budget <span className="text-surface-400 font-normal">(opsional)</span></label>
+            <input className="input" type="number" inputMode="numeric" placeholder="0" value={tripForm.budget} onChange={e => setTripForm({...tripForm, budget:e.target.value})} />
+          </div>
+          <div>
+            <label className="label">Catatan <span className="text-surface-400 font-normal">(opsional)</span></label>
+            <input className="input" placeholder="Itinerary, tujuan, dll." value={tripForm.notes} onChange={e => setTripForm({...tripForm, notes:e.target.value})} />
+          </div>
+          <div className="flex gap-2 pt-1">
+            {editingTrip && <button onClick={() => { deleteTrip(editingTrip.id); setShowTripModal(false) }} className="btn btn-danger flex-1">Hapus</button>}
+            <button onClick={saveTrip} className="btn btn-primary flex-1">{editingTrip ? 'Simpan' : 'Buat Trip'}</button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* ── Trip Detail Modal ── */}
+      <Modal open={showDetail && !!selectedTrip} onClose={() => { setShowDetail(false); setSelectedTrip(null) }}
+        title={selectedTrip ? `${selectedTrip.emoji} ${selectedTrip.name}` : ''}>
+        {selectedTrip && (
+          <div className="space-y-4">
+            <div className="p-3 bg-blue-50 rounded-xl text-xs space-y-1.5">
+              {selectedTrip.destination && (
+                <div className="flex justify-between">
+                  <span className="text-surface-500">Destinasi</span>
+                  <span className="font-bold">📍 {selectedTrip.destination}</span>
                 </div>
-              )
-            })}
+              )}
+              <div className="flex justify-between">
+                <span className="text-surface-500">Periode</span>
+                <span className="font-bold">
+                  {selectedTrip.start_date && selectedTrip.end_date
+                    ? `${formatDate(selectedTrip.start_date)} – ${formatDate(selectedTrip.end_date)}`
+                    : selectedTrip.start_date ? `Mulai ${formatDate(selectedTrip.start_date)}`
+                    : selectedTrip.end_date ? `Sampai ${formatDate(selectedTrip.end_date)}`
+                    : 'Tanggal fleksibel'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-surface-500">Total</span>
+                <span className="font-extrabold text-red-500 font-mono">{formatCurrency(detailTotal)}</span>
+              </div>
+              {selectedTrip.budget && (
+                <div className="flex justify-between">
+                  <span className="text-surface-500">Budget</span>
+                  <span className={`font-bold font-mono ${detailTotal>Number(selectedTrip.budget)?'text-red-500':'text-green-600'}`}>
+                    {formatCurrency(Number(selectedTrip.budget))} {detailTotal>Number(selectedTrip.budget)?'⚠️':'✅'}
+                  </span>
+                </div>
+              )}
+              {(excludedMap[selectedTrip.id]||new Set()).size > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-amber-600">Dikecualikan</span>
+                  <span className="font-bold text-amber-600">{(excludedMap[selectedTrip.id]||new Set()).size} transaksi</span>
+                </div>
+              )}
+            </div>
+
+            {expByCat.length > 0 && (
+              <div>
+                <p className="text-xs font-bold text-surface-600 mb-2">Breakdown per Kategori</p>
+                <div className="space-y-2">
+                  {expByCat.map(cat => {
+                    const pct = detailTotal > 0 ? (cat.value/detailTotal)*100 : 0
+                    return (
+                      <div key={cat.name}>
+                        <div className="flex justify-between text-xs mb-1">
+                          <span className="font-semibold text-surface-700">{cat.icon} {cat.name}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-surface-400">{pct.toFixed(0)}%</span>
+                            <span className="font-mono font-bold">{formatShort(cat.value)}</span>
+                          </div>
+                        </div>
+                        <div className="progress-bar h-1.5">
+                          <div className="progress-fill" style={{ width:`${pct}%`, background:'#3b82f6' }} />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-bold text-surface-600">Transaksi ({detailTxs.length})</p>
+                <button onClick={() => { setShowDetail(false); setShowAddTxModal(true) }} className="text-xs font-bold text-brand-600">+ Tambah</button>
+              </div>
+              {detailTxs.length > 0 ? (
+                <div className="space-y-2 max-h-56 overflow-y-auto">
+                  {detailTxs.map(tx => {
+                    const isTagged = (tx as any).trip_id === selectedTrip.id
+                    return (
+                      <div key={tx.id} className="flex items-center gap-2 p-2.5 rounded-xl bg-surface-50">
+                        <div className="w-8 h-8 rounded-xl bg-white border border-surface-100 flex items-center justify-center text-sm flex-shrink-0">
+                          {(tx as any).categories?.icon || '💸'}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold text-surface-800 truncate">
+                            {tx.description || (tx as any).categories?.name || 'Pengeluaran'}
+                          </p>
+                          <p className="text-[10px] text-surface-400">
+                            {formatDate(tx.date)} · {(tx as any).wallets?.name}
+                            {isTagged && <span className="ml-1 text-brand-500 font-bold">✓</span>}
+                          </p>
+                        </div>
+                        <p className="text-xs font-bold font-mono text-red-500 flex-shrink-0">-{formatShort(Number(tx.amount))}</p>
+                        <button
+                          onClick={() => toggleExclude(selectedTrip.id, tx.id)}
+                          title="Keluarkan dari trip"
+                          className="w-7 h-7 rounded-lg bg-red-50 text-red-400 hover:bg-red-100 hover:text-red-600 flex items-center justify-center text-xs flex-shrink-0"
+                        >✕</button>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="text-center py-6 text-surface-300 text-sm">
+                  {(selectedTrip.start_date || selectedTrip.end_date)
+                    ? 'Belum ada transaksi di periode ini'
+                    : 'Tag transaksi dari halaman Transaksi, atau tambah di sini'}
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => { setShowDetail(false); openEditTrip(selectedTrip) }} className="btn btn-secondary flex-1">✏️ Edit</button>
+              {(selectedTrip.start_date || selectedTrip.end_date) && (
+                <button onClick={() => { setShowDetail(false); setShowExcludeModal(true) }} className="btn btn-secondary flex-1">🔧 Override Transaksi</button>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
 
-      {props.stats.count === 0 && (
-        <div className="text-center py-8 text-sm text-surface-400">
-          Belum ada pengeluaran di rentang tanggal ini.
-        </div>
-      )}
-    </div>
-  )
-}
-
-function StatCard(props: { trip: Trip; stats: TripStats; days: number; perDay: number; primary: boolean }) {
-  return (
-    <div className={'card p-3 ' + (props.primary ? 'ring-2 ring-brand-500' : '')}>
-      <p className="text-[10px] font-bold text-surface-400 uppercase truncate mb-2">{props.trip.emoji} {props.trip.name}</p>
-      <p className="text-[11px] text-surface-400">Total Expense</p>
-      <p className="text-base font-extrabold text-red-600 font-mono leading-tight">{fmtShort(props.stats.totalExpense)}</p>
-      <div className="mt-2 pt-2 border-t border-surface-100 space-y-1">
-        <div className="flex justify-between text-[10px]">
-          <span className="text-surface-400">Durasi</span>
-          <span className="font-semibold text-surface-800">{props.days} hari</span>
-        </div>
-        <div className="flex justify-between text-[10px]">
-          <span className="text-surface-400">Per hari</span>
-          <span className="font-semibold text-surface-800 font-mono">{fmtShort(props.perDay)}</span>
-        </div>
-        <div className="flex justify-between text-[10px]">
-          <span className="text-surface-400">Transaksi</span>
-          <span className="font-semibold text-surface-800">{props.stats.count}x</span>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function DiffRow(props: { label: string; a: number; b: number }) {
-  const diff = props.a - props.b
-  const pct = props.b > 0 ? Math.abs((diff / props.b) * 100).toFixed(0) : null
-  const color = diff > 0 ? 'text-red-600' : diff < 0 ? 'text-green-600' : 'text-surface-400'
-  return (
-    <div className="flex items-center justify-between text-xs mb-1">
-      <span className="text-blue-700">{props.label}</span>
-      <span className={'font-semibold font-mono ' + color}>
-        {diff > 0 ? '+' : diff < 0 ? '-' : ''}{fmtShort(Math.abs(diff))}
-        {pct && <span className="text-[10px] font-normal ml-1">({pct}%)</span>}
-      </span>
-    </div>
-  )
-}
-
-function TxSection(props: { txs: Tx[]; trip: Trip; onTagPress: () => void }) {
-  const expenses = props.txs.filter(function(t) { return t.type === 'expense' })
-  const income = props.txs.filter(function(t) { return t.type === 'income' })
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-surface-400">{props.txs.length} transaksi</p>
-        <button onClick={props.onTagPress} className="btn-ghost text-xs px-2 py-1">+ Tag Manual</button>
-      </div>
-
-      {props.txs.length === 0 && (
-        <div className="text-center py-8 text-sm text-surface-400">
-          Belum ada transaksi di rentang waktu ini.
-        </div>
-      )}
-
-      {expenses.length > 0 && (
-        <div>
-          <p className="text-[10px] font-bold text-surface-400 uppercase mb-2">Pengeluaran</p>
-          <div className="space-y-1.5">
-            {expenses.map(function(tx) { return <TxRow key={tx.id} tx={tx} trip={props.trip} /> })}
+      {/* ── Override Modal: full list of date-range txs ── */}
+      <Modal open={showExcludeModal && !!selectedTrip} onClose={() => { setShowExcludeModal(false); setShowDetail(true) }} title="Override Transaksi Trip">
+        {selectedTrip && (
+          <div className="space-y-3">
+            <div className="p-3 bg-amber-50 rounded-xl text-xs text-amber-800">
+              💡 Transaksi di bawah masuk otomatis karena tanggalnya ada di periode trip. Tap <strong>Exclude</strong> untuk mengeluarkannya dari rekap ini — tidak akan menghapus transaksi asli.
+            </div>
+            <div className="space-y-2 max-h-[60vh] overflow-y-auto">
+              {allRangeTxs.length === 0 ? (
+                <div className="text-center py-8 text-surface-300 text-sm">Tidak ada transaksi di periode trip ini</div>
+              ) : allRangeTxs.map(tx => {
+                const isExcluded = (excludedMap[selectedTrip.id] || new Set()).has(tx.id)
+                const isTagged = (tx as any).trip_id === selectedTrip.id
+                return (
+                  <div key={tx.id} className={`flex items-center gap-2 p-3 rounded-xl border transition-all ${isExcluded ? 'border-red-200 bg-red-50' : 'border-surface-100 bg-white'}`}>
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-sm font-semibold truncate ${isExcluded ? 'line-through text-surface-400' : 'text-surface-800'}`}>
+                        {(tx as any).categories?.icon} {tx.description || (tx as any).categories?.name || 'Pengeluaran'}
+                      </p>
+                      <p className="text-[10px] text-surface-400">
+                        {formatDate(tx.date)} · {(tx as any).wallets?.name}
+                        {isTagged && <span className="ml-1 text-brand-500 font-bold">· Tagged</span>}
+                        {isExcluded && <span className="ml-1 text-red-400 font-bold">· Dikecualikan</span>}
+                      </p>
+                    </div>
+                    <p className="text-xs font-bold font-mono text-red-500 flex-shrink-0">-{formatShort(Number(tx.amount))}</p>
+                    <button
+                      onClick={() => toggleExclude(selectedTrip.id, tx.id)}
+                      className={`text-xs font-bold flex-shrink-0 px-2.5 py-1.5 rounded-xl transition-all ${isExcluded ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-red-50 text-red-500 hover:bg-red-100'}`}
+                    >
+                      {isExcluded ? '↩ Masukkan' : '✕ Exclude'}
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+            <button onClick={() => { setShowExcludeModal(false); setShowDetail(true) }} className="btn btn-primary w-full">Selesai</button>
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
 
-      {income.length > 0 && (
-        <div>
-          <p className="text-[10px] font-bold text-surface-400 uppercase mb-2 mt-3">Pemasukan</p>
-          <div className="space-y-1.5">
-            {income.map(function(tx) { return <TxRow key={tx.id} tx={tx} trip={props.trip} /> })}
+      {/* ── Add Tx to Trip Modal ── */}
+      <Modal open={showAddTxModal && !!selectedTrip} onClose={() => { setShowAddTxModal(false); setShowDetail(true) }} title={`Catat Pengeluaran — ${selectedTrip?.name}`}>
+        {selectedTrip && (
+          <div className="space-y-4">
+            <div>
+              <label className="label">Jumlah</label>
+              <input className="input text-xl font-bold" type="number" inputMode="numeric" placeholder="0" value={addTxForm.amount} onChange={e => setAddTxForm({...addTxForm, amount:e.target.value})} />
+            </div>
+            <div>
+              <label className="label">Dompet</label>
+              <select className="input" value={addTxForm.wallet_id} onChange={e => setAddTxForm({...addTxForm, wallet_id:e.target.value})}>
+                <option value="">Pilih dompet</option>
+                {personalWallets.map(w => <option key={w.id} value={w.id}>{w.icon||'💳'} {w.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Kategori <span className="text-surface-400 font-normal">(opsional)</span></label>
+              <select className="input" value={addTxForm.category_id} onChange={e => setAddTxForm({...addTxForm, category_id:e.target.value})}>
+                <option value="">Pilih kategori</option>
+                {expenseCategories.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Keterangan</label>
+              <input className="input" placeholder="mis. Makan malam, Tiket masuk" value={addTxForm.description} onChange={e => setAddTxForm({...addTxForm, description:e.target.value})} />
+            </div>
+            <div>
+              <label className="label">Tanggal</label>
+              <input className="input" type="date" value={addTxForm.date} onChange={e => setAddTxForm({...addTxForm, date:e.target.value})} />
+            </div>
+            <div className="p-3 bg-blue-50 rounded-xl text-xs text-blue-700 flex gap-2">
+              <span>🧳</span>
+              <span>Akan otomatis ditag ke trip <strong>{selectedTrip.name}</strong>.</span>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => { setShowAddTxModal(false); setShowDetail(true) }} className="btn btn-secondary flex-1">Batal</button>
+              <button onClick={saveAddTx} className="btn btn-primary flex-1">Simpan</button>
+            </div>
           </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function TxRow(props: { tx: Tx; trip: Trip }) {
-  const tx = props.tx
-  const trip = props.trip
-  const isManual = tx.trip_id === trip.id
-  const inRange = tx.date >= trip.start_date && (trip.end_date === null || tx.date <= trip.end_date)
-  return (
-    <div className="flex items-center gap-2 p-2.5 rounded-xl bg-white border border-surface-100">
-      <span className="text-base">{tx.categories ? tx.categories.icon : '📦'}</span>
-      <div className="flex-1 min-w-0">
-        <p className="text-xs font-medium text-surface-800 truncate">
-          {tx.description || (tx.categories ? tx.categories.name : 'Transaksi')}
-        </p>
-        <p className="text-[10px] text-surface-400">
-          {tx.date}
-          {isManual && !inRange && <span className="ml-1 text-brand-600">tag manual</span>}
-        </p>
-      </div>
-      <span className={'text-xs font-bold font-mono ' + (tx.type === 'expense' ? 'text-red-600' : 'text-green-600')}>
-        {tx.type === 'expense' ? '-' : '+'}{fmtShort(Number(tx.amount))}
-      </span>
-    </div>
+        )}
+      </Modal>
+    </AppShell>
   )
 }
