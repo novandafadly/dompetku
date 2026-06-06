@@ -6,14 +6,14 @@ import { supabase } from '@/lib/supabase'
 import Sidebar from './Sidebar'
 import ToastProvider from './Toast'
 
-// Bottom nav items (most used, max 5)
+// Bottom nav items (most used, max 5-6 for mobile)
 const BOTTOM_NAV = [
-  { href: '/dashboard',    icon: '📊', label: 'Home' },
+  { href: '/dashboard',    icon: '🏠', label: 'Home' },
   { href: '/transactions', icon: '📝', label: 'Transaksi' },
   { href: '/wallets',      icon: '💳', label: 'Dompet' },
+  { href: '/transfers',    icon: '🔀', label: 'Transfer' },
   { href: '/reports',      icon: '📈', label: 'Laporan' },
-  { href: '/budgets',      icon: '🎯', label: 'Anggaran' },
-  { href: '/transfers',    icon: '🔀',  label: 'Transfer' },
+  { href: '/budgets',      icon: '📋', label: 'Anggaran' },
 ]
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
