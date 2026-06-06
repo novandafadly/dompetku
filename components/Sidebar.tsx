@@ -15,7 +15,7 @@ const NAV_ITEMS = [
   { href: '/credit-cards', label: 'Kartu Kredit',    icon: '💎' },
   { href: '/debts',        label: 'Utang/Piutang',   icon: '🤝' },
   { href: '/trips',         label: 'Trip & Healing',   icon: '🧳' },
-  { href: '/savings-goals', label: 'Tujuan Tabungan', icon: '🎯' },
+  { href: '/savings-goals', label: 'Tujuan Tabunganku', icon: '🎯' },
   { href: '/categories',    label: 'Kategori',         icon: '🏷️' },
   { href: '/reports',       label: 'Laporan',          icon: '📈' },
   { href: '/export',        label: 'Export Data',      icon: '📤' },
