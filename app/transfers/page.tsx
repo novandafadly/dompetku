@@ -110,47 +110,32 @@ export default function TransfersPage() {
     if (form.from_wallet_id === form.to_wallet_id) { toast('Dompet asal & tujuan harus berbeda!', '⚠️'); return }
 
     const fromWallet = wallets.find(w => w.id === form.from_wallet_id)
-    const toWallet = wallets.find(w => w.id === form.to_wallet_id)
-    if (!fromWallet || !toWallet) return
-
-    if (editingId) {
-      // Reverse old transfer first
-      const old = transfers.find(t => t.id === editingId)
-      if (old) {
-        // Undo: kembalikan saldo lama
-        await supabase.from('wallets').update({ balance: Number(fromWallet.balance) + Number(old.amount) + Number(old.fee || 0) }).eq('id', old.from_wallet_id)
-        await supabase.from('wallets').update({ balance: Number(toWallet.balance) - Number(old.amount) }).eq('id', old.to_wallet_id)
-        await supabase.from('transfers').delete().eq('id', editingId)
-      }
-    }
+    if (!fromWallet) return
 
     // Check balance
     if (Number(fromWallet.balance) < amount + fee) {
-      const confirm = window.confirm(`Saldo ${fromWallet.name} tidak cukup (${formatCurrency(Number(fromWallet.balance))}). Lanjutkan?`)
-      if (!confirm) return
+      const ok = window.confirm(`Saldo ${fromWallet.name} tidak cukup (${formatCurrency(Number(fromWallet.balance))}). Lanjutkan?`)
+      if (!ok) return
     }
 
-    // Insert transfer
+    if (editingId) {
+      // Edit = delete lama + insert baru (trigger handles balance both ways)
+      const { error: delErr } = await supabase.from('transfers').delete().eq('id', editingId)
+      if (delErr) { toast(delErr.message, '❌'); return }
+    }
+
+    // Insert — DB trigger otomatis update wallet balance (amount+fee dari asal, amount ke tujuan)
     const { error } = await supabase.from('transfers').insert({
       user_id: session.user.id,
       from_wallet_id: form.from_wallet_id,
       to_wallet_id: form.to_wallet_id,
       amount,
       fee: fee || null,
-      description: form.description || null,
+      note: form.description || null,       // kolom lama
+      description: form.description || null, // kolom baru
       date: form.date,
     })
     if (error) { toast(error.message, '❌'); return }
-
-    // Update wallet balances (biasanya sudah ada DB trigger, ini fallback manual)
-    // Kurangi dari wallet asal (amount + fee)
-    await supabase.from('wallets')
-      .update({ balance: Number(fromWallet.balance) - amount - fee })
-      .eq('id', form.from_wallet_id)
-    // Tambah ke wallet tujuan (amount saja, tanpa fee)
-    await supabase.from('wallets')
-      .update({ balance: Number(toWallet.balance) + amount })
-      .eq('id', form.to_wallet_id)
 
     toast(editingId ? 'Transfer diperbarui! ✅' : 'Transfer berhasil dicatat! 🔀')
     setShowModal(false)
@@ -161,23 +146,8 @@ export default function TransfersPage() {
 
   // ── Delete transfer ───────────────────────────────────────
   async function deleteTransfer(tr: Transfer) {
-    if (!confirm(`Hapus transfer ${formatCurrency(Number(tr.amount))} ini? Saldo dompet akan dikembalikan.`)) return
-
-    const fromWallet = wallets.find(w => w.id === tr.from_wallet_id) || tr.from_wallet
-    const toWallet = wallets.find(w => w.id === tr.to_wallet_id) || tr.to_wallet
-
-    // Reverse balance
-    if (fromWallet) {
-      await supabase.from('wallets')
-        .update({ balance: Number(fromWallet.balance) + Number(tr.amount) + Number(tr.fee || 0) })
-        .eq('id', tr.from_wallet_id)
-    }
-    if (toWallet) {
-      await supabase.from('wallets')
-        .update({ balance: Number(toWallet.balance) - Number(tr.amount) })
-        .eq('id', tr.to_wallet_id)
-    }
-
+    if (!confirm(`Hapus transfer ${formatCurrency(Number(tr.amount))} ini? Saldo dompet akan dikembalikan otomatis.`)) return
+    // DB trigger on DELETE otomatis reverse wallet balance
     await supabase.from('transfers').delete().eq('id', tr.id)
     toast('Transfer dihapus & saldo dikembalikan', '🗑️')
     load()
