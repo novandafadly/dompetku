@@ -47,7 +47,8 @@ export default function TripsPage() {
   const [loading, setLoading] = useState(true)
 
   const [addTxForm, setAddTxForm] = useState({
-    wallet_id: '', category_id: '', amount: '', description: '',
+    wallet_id: '', category_id: '', type: 'expense' as 'expense' | 'income',
+    amount: '', description: '',
     date: new Date().toISOString().split('T')[0],
   })
 
@@ -81,16 +82,18 @@ export default function TripsPage() {
   }
 
   // ── Which transactions belong to a trip ───────────────────
-  // Includes: explicitly tagged (trip_id=trip.id) OR date in range
-  // Excludes: overridden via trip_excluded_transactions
+  // Includes: explicitly tagged (trip_id=trip.id) OR date in range (expense & income)
+  // Excludes: overridden via trip_excluded_transactions, kantor pocket
   function getTripTransactions(trip: Trip): Transaction[] {
     const excluded = excludedMap[trip.id] || new Set<string>()
     return transactions.filter(tx => {
       if (excluded.has(tx.id)) return false
-      if ((tx as any).trip_id === trip.id) return true
-      if ((tx as any).trip_id && (tx as any).trip_id !== trip.id) return false
-      if (tx.type !== 'expense') return false
       if ((tx as any).wallets?.pocket === 'kantor') return false
+      // Explicitly tagged to this trip — always include
+      if ((tx as any).trip_id === trip.id) return true
+      // Tagged to a different trip — skip
+      if ((tx as any).trip_id && (tx as any).trip_id !== trip.id) return false
+      // Date-range auto-include (expense & income)
       if (trip.start_date || trip.end_date) {
         if (trip.start_date && tx.date < trip.start_date) return false
         if (trip.end_date && tx.date > trip.end_date) return false
@@ -187,14 +190,14 @@ export default function TripsPage() {
 
     const { error } = await supabase.from('transactions').insert({
       user_id: session.user.id, wallet_id: addTxForm.wallet_id,
-      category_id: addTxForm.category_id || null, type: 'expense', amount,
+      category_id: addTxForm.category_id || null, type: addTxForm.type, amount,
       description: addTxForm.description || null, date: addTxForm.date,
       trip_id: selectedTrip.id,
     })
     if (error) { toast(error.message, '❌'); return }
-    toast('Pengeluaran trip dicatat!', '💸')
+    toast(addTxForm.type === 'income' ? 'Pemasukan trip dicatat! 💰' : 'Pengeluaran trip dicatat! 💸')
     setShowAddTxModal(false)
-    setAddTxForm({ wallet_id:'', category_id:'', amount:'', description:'', date: new Date().toISOString().split('T')[0] })
+    setAddTxForm({ wallet_id:'', category_id:'', type:'expense', amount:'', description:'', date: new Date().toISOString().split('T')[0] })
     load()
     setTimeout(() => setShowDetail(true), 400)
   }
@@ -224,13 +227,15 @@ export default function TripsPage() {
     selectedTrip ? getTripTransactions(selectedTrip) : [],
     [selectedTrip, transactions, excludedMap]
   )
-  const detailTotal = useMemo(() => detailTxs.reduce((s,t) => s + Number(t.amount), 0), [detailTxs])
+  const detailExpense = useMemo(() => detailTxs.filter(t => t.type === 'expense').reduce((s,t) => s + Number(t.amount), 0), [detailTxs])
+  const detailIncome = useMemo(() => detailTxs.filter(t => t.type === 'income').reduce((s,t) => s + Number(t.amount), 0), [detailTxs])
+  const detailNet = detailExpense - detailIncome  // positif = boncos, negatif = surplus
 
   const expByCat = useMemo(() => {
-    const map: Record<string, {name:string; icon:string; value:number}> = {}
-    detailTxs.forEach(t => {
+    const map: Record<string, {name:string; icon:string; value:number; type:string}> = {}
+    detailTxs.filter(t => t.type === 'expense').forEach(t => {
       const key = (t as any).categories?.name || 'Lainnya'
-      if (!map[key]) map[key] = { name:key, icon:(t as any).categories?.icon||'📦', value:0 }
+      if (!map[key]) map[key] = { name:key, icon:(t as any).categories?.icon||'📦', value:0, type:'expense' }
       map[key].value += Number(t.amount)
     })
     return Object.values(map).sort((a,b) => b.value - a.value)
@@ -240,7 +245,6 @@ export default function TripsPage() {
   const allRangeTxs = useMemo(() => {
     if (!selectedTrip) return []
     return transactions.filter(tx => {
-      if (tx.type !== 'expense') return false
       if ((tx as any).wallets?.pocket === 'kantor') return false
       if ((tx as any).trip_id === selectedTrip.id) return true
       if ((tx as any).trip_id && (tx as any).trip_id !== selectedTrip.id) return false
@@ -253,7 +257,6 @@ export default function TripsPage() {
     })
   }, [selectedTrip, transactions])
 
-  const expenseCategories = categories.filter(c => c.type === 'expense')
   const personalWallets = wallets.filter(w => w.pocket !== 'kantor')
 
   function dateRangeHint() {
@@ -282,9 +285,11 @@ export default function TripsPage() {
         <div className="space-y-3">
           {trips.map(trip => {
             const tripTxs = getTripTransactions(trip)
-            const total = tripTxs.reduce((s,t) => s + Number(t.amount), 0)
-            const budgetPct = trip.budget && total > 0 ? Math.min((total / Number(trip.budget)) * 100, 100) : 0
-            const over = trip.budget && total > Number(trip.budget)
+            const expense = tripTxs.filter(t => t.type === 'expense').reduce((s,t) => s + Number(t.amount), 0)
+            const income = tripTxs.filter(t => t.type === 'income').reduce((s,t) => s + Number(t.amount), 0)
+            const net = expense - income
+            const budgetPct = trip.budget && expense > 0 ? Math.min((expense / Number(trip.budget)) * 100, 100) : 0
+            const over = trip.budget && expense > Number(trip.budget)
             const excCount = (excludedMap[trip.id] || new Set()).size
 
             return (
@@ -306,10 +311,19 @@ export default function TripsPage() {
                     </p>
                   </div>
                   <div className="text-right flex-shrink-0">
-                    <p className="text-base font-extrabold font-mono text-surface-900">{formatShort(total)}</p>
-                    <p className="text-[10px] text-surface-400">{tripTxs.length} transaksi</p>
+                    <p className={`text-base font-extrabold font-mono ${net > 0 ? 'text-red-500' : net < 0 ? 'text-green-600' : 'text-surface-900'}`}>
+                      {net > 0 ? '-' : net < 0 ? '+' : ''}{formatShort(Math.abs(net))}
+                    </p>
+                    <p className="text-[10px] text-surface-400">{net > 0 ? 'boncos' : net < 0 ? 'surplus' : 'impas'}</p>
                   </div>
                 </div>
+                {/* Mini income/expense row jika ada keduanya */}
+                {income > 0 && (
+                  <div className="flex gap-3 text-[10px] mb-2 px-0.5">
+                    <span className="text-red-500">Keluar: <span className="font-bold font-mono">{formatShort(expense)}</span></span>
+                    <span className="text-green-600">Masuk: <span className="font-bold font-mono">{formatShort(income)}</span></span>
+                  </div>
+                )}
                 {trip.budget && (
                   <div>
                     <div className="flex justify-between text-[10px] mb-1">
@@ -405,15 +419,30 @@ export default function TripsPage() {
                     : 'Tanggal fleksibel'}
                 </span>
               </div>
+              <div className="border-t border-blue-100 my-1" />
               <div className="flex justify-between">
-                <span className="text-surface-500">Total</span>
-                <span className="font-extrabold text-red-500 font-mono">{formatCurrency(detailTotal)}</span>
+                <span className="text-red-500 font-semibold">💸 Total Keluar</span>
+                <span className="font-bold font-mono text-red-500">{formatCurrency(detailExpense)}</span>
+              </div>
+              {detailIncome > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-green-600 font-semibold">💰 Total Masuk</span>
+                  <span className="font-bold font-mono text-green-600">+{formatCurrency(detailIncome)}</span>
+                </div>
+              )}
+              <div className="flex justify-between border-t border-blue-100 pt-1 mt-1">
+                <span className={`font-bold ${detailNet > 0 ? 'text-red-600' : detailNet < 0 ? 'text-green-600' : 'text-surface-600'}`}>
+                  {detailNet > 0 ? '📉 Boncos' : detailNet < 0 ? '🎉 Surplus' : '⚖️ Impas'}
+                </span>
+                <span className={`font-extrabold font-mono ${detailNet > 0 ? 'text-red-600' : detailNet < 0 ? 'text-green-600' : 'text-surface-600'}`}>
+                  {detailNet > 0 ? '-' : detailNet < 0 ? '+' : ''}{formatCurrency(Math.abs(detailNet))}
+                </span>
               </div>
               {selectedTrip.budget && (
-                <div className="flex justify-between">
+                <div className="flex justify-between border-t border-blue-100 pt-1">
                   <span className="text-surface-500">Budget</span>
-                  <span className={`font-bold font-mono ${detailTotal>Number(selectedTrip.budget)?'text-red-500':'text-green-600'}`}>
-                    {formatCurrency(Number(selectedTrip.budget))} {detailTotal>Number(selectedTrip.budget)?'⚠️':'✅'}
+                  <span className={`font-bold font-mono ${detailExpense>Number(selectedTrip.budget)?'text-red-500':'text-green-600'}`}>
+                    {formatCurrency(Number(selectedTrip.budget))} {detailExpense>Number(selectedTrip.budget)?'⚠️':'✅'}
                   </span>
                 </div>
               )}
@@ -459,21 +488,24 @@ export default function TripsPage() {
                 <div className="space-y-2 max-h-56 overflow-y-auto">
                   {detailTxs.map(tx => {
                     const isTagged = (tx as any).trip_id === selectedTrip.id
+                    const isIncome = tx.type === 'income'
                     return (
-                      <div key={tx.id} className="flex items-center gap-2 p-2.5 rounded-xl bg-surface-50">
-                        <div className="w-8 h-8 rounded-xl bg-white border border-surface-100 flex items-center justify-center text-sm flex-shrink-0">
-                          {(tx as any).categories?.icon || '💸'}
+                      <div key={tx.id} className={`flex items-center gap-2 p-2.5 rounded-xl ${isIncome ? 'bg-green-50' : 'bg-surface-50'}`}>
+                        <div className={`w-8 h-8 rounded-xl border flex items-center justify-center text-sm flex-shrink-0 ${isIncome ? 'bg-green-100 border-green-200' : 'bg-white border-surface-100'}`}>
+                          {(tx as any).categories?.icon || (isIncome ? '💰' : '💸')}
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-semibold text-surface-800 truncate">
-                            {tx.description || (tx as any).categories?.name || 'Pengeluaran'}
+                            {tx.description || (tx as any).categories?.name || (isIncome ? 'Pemasukan' : 'Pengeluaran')}
                           </p>
                           <p className="text-[10px] text-surface-400">
                             {formatDate(tx.date)} · {(tx as any).wallets?.name}
                             {isTagged && <span className="ml-1 text-brand-500 font-bold">✓</span>}
                           </p>
                         </div>
-                        <p className="text-xs font-bold font-mono text-red-500 flex-shrink-0">-{formatShort(Number(tx.amount))}</p>
+                        <p className={`text-xs font-bold font-mono flex-shrink-0 ${isIncome ? 'text-green-600' : 'text-red-500'}`}>
+                          {isIncome ? '+' : '-'}{formatShort(Number(tx.amount))}
+                        </p>
                         <button
                           onClick={() => toggleExclude(selectedTrip.id, tx.id)}
                           title="Keluarkan dari trip"
@@ -515,11 +547,12 @@ export default function TripsPage() {
               ) : allRangeTxs.map(tx => {
                 const isExcluded = (excludedMap[selectedTrip.id] || new Set()).has(tx.id)
                 const isTagged = (tx as any).trip_id === selectedTrip.id
+                const isIncome = tx.type === 'income'
                 return (
-                  <div key={tx.id} className={`flex items-center gap-2 p-3 rounded-xl border transition-all ${isExcluded ? 'border-red-200 bg-red-50' : 'border-surface-100 bg-white'}`}>
+                  <div key={tx.id} className={`flex items-center gap-2 p-3 rounded-xl border transition-all ${isExcluded ? 'border-red-200 bg-red-50' : isIncome ? 'border-green-100 bg-green-50' : 'border-surface-100 bg-white'}`}>
                     <div className="flex-1 min-w-0">
                       <p className={`text-sm font-semibold truncate ${isExcluded ? 'line-through text-surface-400' : 'text-surface-800'}`}>
-                        {(tx as any).categories?.icon} {tx.description || (tx as any).categories?.name || 'Pengeluaran'}
+                        {(tx as any).categories?.icon} {tx.description || (tx as any).categories?.name || (isIncome ? 'Pemasukan' : 'Pengeluaran')}
                       </p>
                       <p className="text-[10px] text-surface-400">
                         {formatDate(tx.date)} · {(tx as any).wallets?.name}
@@ -527,7 +560,9 @@ export default function TripsPage() {
                         {isExcluded && <span className="ml-1 text-red-400 font-bold">· Dikecualikan</span>}
                       </p>
                     </div>
-                    <p className="text-xs font-bold font-mono text-red-500 flex-shrink-0">-{formatShort(Number(tx.amount))}</p>
+                    <p className={`text-xs font-bold font-mono flex-shrink-0 ${isIncome ? 'text-green-600' : 'text-red-500'}`}>
+                      {isIncome ? '+' : '-'}{formatShort(Number(tx.amount))}
+                    </p>
                     <button
                       onClick={() => toggleExclude(selectedTrip.id, tx.id)}
                       className={`text-xs font-bold flex-shrink-0 px-2.5 py-1.5 rounded-xl transition-all ${isExcluded ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-red-50 text-red-500 hover:bg-red-100'}`}
@@ -544,9 +579,18 @@ export default function TripsPage() {
       </Modal>
 
       {/* ── Add Tx to Trip Modal ── */}
-      <Modal open={showAddTxModal && !!selectedTrip} onClose={() => { setShowAddTxModal(false); setShowDetail(true) }} title={`Catat Pengeluaran — ${selectedTrip?.name}`}>
+      <Modal open={showAddTxModal && !!selectedTrip} onClose={() => { setShowAddTxModal(false); setShowDetail(true) }} title={`Catat Transaksi — ${selectedTrip?.name}`}>
         {selectedTrip && (
           <div className="space-y-4">
+            <div>
+              <label className="label">Tipe</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={() => setAddTxForm({...addTxForm, type:'expense', category_id:''})}
+                  className={`btn ${addTxForm.type==='expense' ? 'bg-red-50 text-red-700 border border-red-200' : 'btn-secondary'}`}>💸 Pengeluaran</button>
+                <button onClick={() => setAddTxForm({...addTxForm, type:'income', category_id:''})}
+                  className={`btn ${addTxForm.type==='income' ? 'bg-green-50 text-green-700 border border-green-200' : 'btn-secondary'}`}>💰 Pemasukan</button>
+              </div>
+            </div>
             <div>
               <label className="label">Jumlah</label>
               <input className="input text-xl font-bold" type="number" inputMode="numeric" placeholder="0" value={addTxForm.amount} onChange={e => setAddTxForm({...addTxForm, amount:e.target.value})} />
@@ -562,18 +606,18 @@ export default function TripsPage() {
               <label className="label">Kategori <span className="text-surface-400 font-normal">(opsional)</span></label>
               <select className="input" value={addTxForm.category_id} onChange={e => setAddTxForm({...addTxForm, category_id:e.target.value})}>
                 <option value="">Pilih kategori</option>
-                {expenseCategories.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
+                {categories.filter(c => c.type === addTxForm.type).map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
               </select>
             </div>
             <div>
               <label className="label">Keterangan</label>
-              <input className="input" placeholder="mis. Makan malam, Tiket masuk" value={addTxForm.description} onChange={e => setAddTxForm({...addTxForm, description:e.target.value})} />
+              <input className="input" placeholder={addTxForm.type==='income' ? 'mis. Uang saku dinas, Per diem' : 'mis. Makan malam, Tiket masuk'} value={addTxForm.description} onChange={e => setAddTxForm({...addTxForm, description:e.target.value})} />
             </div>
             <div>
               <label className="label">Tanggal</label>
               <input className="input" type="date" value={addTxForm.date} onChange={e => setAddTxForm({...addTxForm, date:e.target.value})} />
             </div>
-            <div className="p-3 bg-blue-50 rounded-xl text-xs text-blue-700 flex gap-2">
+            <div className={`p-3 rounded-xl text-xs flex gap-2 ${addTxForm.type==='income' ? 'bg-green-50 text-green-700' : 'bg-blue-50 text-blue-700'}`}>
               <span>🧳</span>
               <span>Akan otomatis ditag ke trip <strong>{selectedTrip.name}</strong>.</span>
             </div>
