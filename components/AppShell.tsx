@@ -13,6 +13,7 @@ const BOTTOM_NAV = [
   { href: '/wallets',      icon: '💳', label: 'Dompet' },
   { href: '/reports',      icon: '📈', label: 'Laporan' },
   { href: '/budgets',      icon: '🎯', label: 'Anggaran' },
+  { href: '/transfers',    icon: '🔀',  label: 'Transfer' },
 ]
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
