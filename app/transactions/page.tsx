@@ -145,7 +145,7 @@ export default function TransactionsPage() {
     const selectedWallet = wallets.find(w => w.id === form.wallet_id)
     const isKantor = selectedWallet?.pocket === 'kantor'
     const reimbursable = !isKantor && (form as any).is_reimbursable
-    const tripId = (!isKantor && form.type === 'expense' && form.trip_id) ? form.trip_id : null
+    const tripId = (!isKantor && form.trip_id) ? form.trip_id : null
 
     if (editing) {
       const { error: delError } = await supabase.from('transactions').delete().eq('id', editing.id)
@@ -708,7 +708,7 @@ export default function TransactionsPage() {
             <label className="label">Tanggal</label>
             <input className="input" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
           </div>
-          {form.type === 'expense' && selectedWalletPocket !== 'kantor' && trips.length > 0 && (
+          {selectedWalletPocket !== 'kantor' && trips.length > 0 && (
             <div>
               <label className="label">🧳 Tag ke Trip (opsional)</label>
               <select
@@ -719,7 +719,7 @@ export default function TransactionsPage() {
                 <option value="">— Tidak terhubung trip —</option>
                 {trips.map(t => (
                   <option key={t.id} value={t.id}>
-                    {t.emoji} {t.name} ({t.start_date}{t.end_date ? ` – ${t.end_date}` : ''})
+                    {t.emoji} {t.name} ({t.start_date ? t.start_date : 'Open'}{t.end_date ? ` – ${t.end_date}` : ''})
                   </option>
                 ))}
               </select>
