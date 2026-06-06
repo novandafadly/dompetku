@@ -7,6 +7,7 @@ import { useState } from 'react'
 const NAV_ITEMS = [
   { href: '/dashboard',    label: 'Dashboard',      icon: '📊' },
   { href: '/wallets',      label: 'Dompet',          icon: '💳' },
+  { href: '/transfers',    icon: '🔀',  label: 'Transfer' }, 
   { href: '/transactions', label: 'Transaksi',       icon: '📝' },
   { href: '/recurring',    label: 'Tagihan Rutin',   icon: '🔄' },
   { href: '/budgets',      label: 'Anggaran',        icon: '🎯' },
