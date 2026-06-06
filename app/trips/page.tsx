@@ -459,7 +459,7 @@ export default function TripsPage() {
                 <p className="text-xs font-bold text-surface-600 mb-2">Breakdown per Kategori</p>
                 <div className="space-y-2">
                   {expByCat.map(cat => {
-                    const pct = detailTotal > 0 ? (cat.value/detailTotal)*100 : 0
+                    const pct = detailExpense > 0 ? (cat.value/detailExpense)*100 : 0
                     return (
                       <div key={cat.name}>
                         <div className="flex justify-between text-xs mb-1">
