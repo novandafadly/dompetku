@@ -89,13 +89,21 @@ export default function SavingsGoalsPage() {
 
   async function load() {
     const [g, w, a] = await Promise.all([
-      supabase.from('savings_goals').select('*, wallets(*), assets(id, name, icon, value)').order('created_at', { ascending: false }),
+      supabase.from('savings_goals').select('*').order('created_at', { ascending: false }),
       supabase.from('wallets').select('*').eq('is_active', true).order('name'),
       supabase.from('assets').select('id, name, type, value'),
     ])
-    setGoals((g.data as any) || [])
-    setWallets(w.data || [])
-    setAssets((a.data as any) || [])
+    const walletList = w.data || []
+    const assetList = (a.data as any) || []
+    // Resolve relasi manual (hindari PostgREST embed assets/wallets yang rawan schema-cache issue)
+    const enriched = ((g.data as any) || []).map((goal: SavingsGoal) => ({
+      ...goal,
+      wallets: goal.wallet_id ? walletList.find(w => w.id === goal.wallet_id) : undefined,
+      assets: goal.asset_id ? assetList.find((a: AssetLite) => a.id === goal.asset_id) : undefined,
+    }))
+    setGoals(enriched)
+    setWallets(walletList)
+    setAssets(assetList)
     setLoading(false)
   }
 
