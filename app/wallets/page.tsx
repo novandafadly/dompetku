@@ -1,8 +1,9 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import type { Wallet, Transfer, Pocket, SavingsGoal } from '@/lib/supabase'
-import { formatCurrency, formatDate, formatShort, WALLET_ICONS, WALLET_COLORS, POCKET_META } from '@/lib/utils'
+import { formatCurrency, formatDate, WALLET_ICONS, WALLET_COLORS, POCKET_META } from '@/lib/utils'
 import AppShell from '@/components/AppShell'
 import Modal from '@/components/Modal'
 import { toast } from '@/components/Toast'
@@ -10,39 +11,21 @@ import { toast } from '@/components/Toast'
 type WalletType = 'cash' | 'bank' | 'ewallet' | 'investment'
 type WalletForm = { name: string; type: WalletType; pocket: Pocket; balance: string }
 type TransferForm = { from_wallet_id: string; to_wallet_id: string; amount: string; note: string; date: string }
-type GoalForm = { wallet_id: string; name: string; target_amount: string; target_date: string; icon: string; color: string }
 
 const emptyWalletForm: WalletForm = { name: '', type: 'bank', pocket: 'operasional', balance: '' }
 const emptyTForm: TransferForm = { from_wallet_id: '', to_wallet_id: '', amount: '', note: '', date: new Date().toISOString().split('T')[0] }
-const emptyGoalForm: GoalForm = { wallet_id: '', name: '', target_amount: '', target_date: '', icon: '🎯', color: '#22c55e' }
-
-const GOAL_ICONS = ['🎯','🏠','🚗','✈️','💍','🎓','🖥️','📱','🏖️','💰','🏋️','🎮','👶','🏥','🛒','🎸']
-const GOAL_COLORS = ['#22c55e','#3b82f6','#f59e0b','#ef4444','#a855f7','#ec4899','#06b6d4','#f97316']
-
-function daysUntil(dateStr: string): number {
-  const today = new Date(); today.setHours(0,0,0,0)
-  const d = new Date(dateStr); d.setHours(0,0,0,0)
-  return Math.ceil((d.getTime() - today.getTime()) / 86400000)
-}
-function monthsUntil(dateStr: string): number {
-  const today = new Date()
-  const d = new Date(dateStr)
-  return Math.max(0, (d.getFullYear() - today.getFullYear()) * 12 + d.getMonth() - today.getMonth())
-}
 
 export default function WalletsPage() {
+  const router = useRouter()
   const [wallets, setWallets] = useState<Wallet[]>([])
   const [transfers, setTransfers] = useState<Transfer[]>([])
   const [goals, setGoals] = useState<SavingsGoal[]>([])
   const [showWalletModal, setShowWalletModal] = useState(false)
   const [showTransferModal, setShowTransferModal] = useState(false)
-  const [showGoalModal, setShowGoalModal] = useState(false)
   const [editingWallet, setEditingWallet] = useState<Wallet | null>(null)
   const [editingTransfer, setEditingTransfer] = useState<Transfer | null>(null)
-  const [editingGoal, setEditingGoal] = useState<SavingsGoal | null>(null)
   const [form, setForm] = useState<WalletForm>(emptyWalletForm)
   const [tForm, setTForm] = useState<TransferForm>(emptyTForm)
-  const [gForm, setGForm] = useState<GoalForm>(emptyGoalForm)
 
   useEffect(() => { load() }, [])
 
@@ -50,7 +33,7 @@ export default function WalletsPage() {
     const [w, t, g] = await Promise.all([
       supabase.from('wallets').select('*').eq('is_active', true).order('pocket').order('created_at'),
       supabase.from('transfers').select('*').order('date', { ascending: false }).order('created_at', { ascending: false }).limit(30),
-      supabase.from('savings_goals').select('*, wallets(*)').order('is_completed').order('created_at'),
+      supabase.from('savings_goals').select('*, wallets(*)').eq('is_completed', false).order('created_at'),
     ])
     setWallets(w.data || [])
     setTransfers(t.data || [])
@@ -151,44 +134,6 @@ export default function WalletsPage() {
     toast('Transfer dihapus', '🗑️'); load()
   }
 
-  // ── Savings Goal CRUD ─────────────────────────────────────
-  function openAddGoal(walletId?: string) {
-    setEditingGoal(null)
-    setGForm({ ...emptyGoalForm, wallet_id: walletId || '' })
-    setShowGoalModal(true)
-  }
-  function openEditGoal(g: SavingsGoal) {
-    setEditingGoal(g)
-    setGForm({ wallet_id: g.wallet_id, name: g.name, target_amount: String(g.target_amount), target_date: g.target_date || '', icon: g.icon, color: g.color })
-    setShowGoalModal(true)
-  }
-  async function saveGoal() {
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session) return
-    if (!gForm.name || !gForm.target_amount || !gForm.wallet_id) { toast('Lengkapi nama, target, dan dompet!', '⚠️'); return }
-    const payload = { wallet_id: gForm.wallet_id, name: gForm.name, target_amount: Number(gForm.target_amount), target_date: gForm.target_date || null, icon: gForm.icon, color: gForm.color }
-    if (editingGoal) {
-      const { error } = await supabase.from('savings_goals').update(payload).eq('id', editingGoal.id)
-      if (error) { toast(error.message, '❌'); return }
-      toast('Goal diperbarui!', '✅')
-    } else {
-      const { error } = await supabase.from('savings_goals').insert({ ...payload, user_id: session.user.id })
-      if (error) { toast(error.message, '❌'); return }
-      toast('Goal ditambahkan!', '🎯')
-    }
-    setShowGoalModal(false); setEditingGoal(null); setGForm(emptyGoalForm); load()
-  }
-  async function deleteGoal(id: string) {
-    if (!confirm('Hapus goal ini?')) return
-    await supabase.from('savings_goals').delete().eq('id', id)
-    toast('Goal dihapus', '🗑️'); load()
-  }
-  async function toggleGoalComplete(g: SavingsGoal) {
-    await supabase.from('savings_goals').update({ is_completed: !g.is_completed }).eq('id', g.id)
-    toast(!g.is_completed ? '🎉 Goal tercapai!' : 'Goal dibuka kembali', !g.is_completed ? '🎉' : '🔄')
-    load()
-  }
-
   // ── Derived data ──────────────────────────────────────────
   const pocketTotals = (['operasional', 'tabungan', 'kantor'] as Pocket[]).map(p => ({
     pocket: p,
@@ -196,82 +141,6 @@ export default function WalletsPage() {
     wallets: wallets.filter(w => w.pocket === p),
   }))
   const totalBalance = wallets.reduce((s, w) => s + Number(w.balance), 0)
-  const tabunganWallets = wallets.filter(w => w.pocket === 'tabungan')
-
-  function GoalCard({ goal }: { goal: SavingsGoal }) {
-    const wallet = wallets.find(w => w.id === goal.wallet_id)
-    const current = Number(wallet?.balance || 0)
-    const target = Number(goal.target_amount)
-    const pct = Math.min((current / target) * 100, 100)
-    const remaining = Math.max(target - current, 0)
-    const days = goal.target_date ? daysUntil(goal.target_date) : null
-    const months = goal.target_date ? monthsUntil(goal.target_date) : null
-    const monthlyNeeded = months && months > 0 ? remaining / months : null
-    const isAchieved = current >= target
-    return (
-      <div className={`card p-5 group relative overflow-hidden ${goal.is_completed ? 'opacity-60' : ''}`}>
-        <div className="absolute top-0 left-0 w-1 h-full rounded-l-2xl" style={{ background: goal.color }} />
-        <div className="flex items-start justify-between mb-3 pl-2">
-          <div className="flex items-center gap-2">
-            <span className="text-2xl">{goal.icon}</span>
-            <div>
-              <p className="font-bold text-surface-800">{goal.name}</p>
-              <p className="text-[10px] text-surface-400">{wallet?.name || '—'}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-            {!goal.is_completed && (
-              <button onClick={() => openEditGoal(goal)} className="w-7 h-7 rounded-lg hover:bg-brand-50 text-surface-400 hover:text-brand-600 flex items-center justify-center text-xs">✏️</button>
-            )}
-            <button onClick={() => toggleGoalComplete(goal)} className="w-7 h-7 rounded-lg hover:bg-green-50 text-surface-400 hover:text-green-600 flex items-center justify-center text-xs" title={goal.is_completed ? 'Buka kembali' : 'Tandai selesai'}>
-              {goal.is_completed ? '↩' : '✓'}
-            </button>
-            <button onClick={() => deleteGoal(goal.id)} className="w-7 h-7 rounded-lg hover:bg-red-50 text-surface-400 hover:text-red-500 flex items-center justify-center text-xs">✕</button>
-          </div>
-        </div>
-        <div className="pl-2">
-          <div className="flex justify-between items-end mb-1">
-            <span className="text-xs text-surface-500">Terkumpul</span>
-            <span className="text-sm font-bold font-mono" style={{ color: goal.color }}>{pct.toFixed(0)}%</span>
-          </div>
-          <div className="h-3 bg-surface-100 rounded-full overflow-hidden mb-1">
-            <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: goal.color }} />
-          </div>
-          <div className="flex justify-between text-xs text-surface-500">
-            <span className="font-mono font-semibold" style={{ color: goal.color }}>{formatShort(current)}</span>
-            <span className="font-mono">{formatShort(target)}</span>
-          </div>
-        </div>
-        {!goal.is_completed && (
-          <div className="mt-3 pt-3 border-t border-surface-100 pl-2 grid grid-cols-2 gap-2">
-            <div>
-              <p className="text-[10px] text-surface-400">Kurang</p>
-              <p className="text-sm font-bold font-mono text-surface-800">{remaining > 0 ? formatShort(remaining) : '🎉 Tercapai!'}</p>
-            </div>
-            {goal.target_date && (
-              <div>
-                <p className="text-[10px] text-surface-400">Sisa waktu</p>
-                <p className={`text-sm font-bold ${days! < 0 ? 'text-red-500' : days! < 30 ? 'text-amber-600' : 'text-surface-800'}`}>
-                  {days! < 0 ? `${Math.abs(days!)}h terlambat` : days === 0 ? 'Hari ini!' : `${days}h lagi`}
-                </p>
-              </div>
-            )}
-            {monthlyNeeded && monthlyNeeded > 0 && (
-              <div className="col-span-2">
-                <p className="text-[10px] text-surface-400">Perlu menabung / bulan</p>
-                <p className="text-sm font-bold font-mono text-brand-600">{formatShort(monthlyNeeded)}</p>
-              </div>
-            )}
-          </div>
-        )}
-        {(goal.is_completed || isAchieved) && (
-          <div className="mt-3 pt-3 border-t border-surface-100 pl-2">
-            <p className="text-sm font-bold text-green-600">🎉 Goal tercapai!</p>
-          </div>
-        )}
-      </div>
-    )
-  }
 
   return (
     <AppShell>
@@ -312,7 +181,6 @@ export default function WalletsPage() {
         if (pWallets.length === 0) return null
         const meta = POCKET_META[pocket]
         const isTabungan = pocket === 'tabungan'
-        const pocketGoals = goals.filter(g => pWallets.some(w => w.id === g.wallet_id))
         return (
           <div key={pocket} className="mb-10">
             <div className="flex items-center gap-2 mb-3">
@@ -320,7 +188,7 @@ export default function WalletsPage() {
               <h2 className={`text-sm font-bold uppercase tracking-wider ${meta.color}`}>{meta.label}</h2>
               <div className={`h-px flex-1 ${pocket === 'operasional' ? 'bg-blue-100' : pocket === 'tabungan' ? 'bg-green-100' : 'bg-purple-100'}`} />
               {isTabungan && (
-                <button onClick={() => openAddGoal()} className="btn text-xs py-1.5 px-3 bg-green-50 text-green-700 border border-green-200 hover:bg-green-100">+ Goal</button>
+                <button onClick={() => router.push('/savings-goals')} className="btn text-xs py-1.5 px-3 bg-green-50 text-green-700 border border-green-200 hover:bg-green-100">🎯 Tujuan Tabungan</button>
               )}
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
@@ -336,9 +204,6 @@ export default function WalletsPage() {
                         {w.icon || '💳'}
                       </div>
                       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        {isTabungan && (
-                          <button onClick={() => openAddGoal(w.id)} className="w-7 h-7 rounded-lg hover:bg-green-50 text-surface-400 hover:text-green-600 flex items-center justify-center text-xs" title="Tambah goal">🎯</button>
-                        )}
                         <button onClick={() => openEditWallet(w)} className="w-7 h-7 rounded-lg hover:bg-brand-50 text-surface-400 hover:text-brand-600 flex items-center justify-center text-xs">✏️</button>
                         <button onClick={() => deleteWallet(w.id)} className="w-7 h-7 rounded-lg hover:bg-red-50 text-surface-400 hover:text-red-500 flex items-center justify-center text-xs">✕</button>
                       </div>
@@ -361,21 +226,23 @@ export default function WalletsPage() {
                 )
               })}
             </div>
-            {isTabungan && pocketGoals.length > 0 && (
-              <div>
-                <p className="text-xs font-bold text-surface-500 uppercase tracking-wider mb-3">🎯 Savings Goals</p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {pocketGoals.filter(g => !g.is_completed).map(g => <GoalCard key={g.id} goal={g} />)}
-                  {pocketGoals.filter(g => g.is_completed).map(g => <GoalCard key={g.id} goal={g} />)}
+            {isTabungan && goals.filter(g => pWallets.some(w => w.id === g.wallet_id)).length > 0 && (
+              <div className="card p-4 flex items-center justify-between bg-green-50/30 border border-green-100">
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">🎯</span>
+                  <p className="text-sm text-surface-600">
+                    <span className="font-bold text-surface-800">{goals.filter(g => pWallets.some(w => w.id === g.wallet_id)).length}</span> tujuan tabungan aktif di pocket ini
+                  </p>
                 </div>
+                <button onClick={() => router.push('/savings-goals')} className="btn btn-secondary text-xs py-1.5 px-3">Kelola →</button>
               </div>
             )}
-            {isTabungan && pocketGoals.length === 0 && tabunganWallets.length > 0 && (
+            {isTabungan && goals.filter(g => pWallets.some(w => w.id === g.wallet_id)).length === 0 && (
               <div className="card p-6 text-center border-dashed border-2 border-green-200 bg-green-50/30">
                 <p className="text-2xl mb-2">🎯</p>
-                <p className="text-sm font-semibold text-surface-600">Belum ada savings goal</p>
+                <p className="text-sm font-semibold text-surface-600">Belum ada tujuan tabungan</p>
                 <p className="text-xs text-surface-400 mt-1 mb-3">Set target tabungan untuk rumah, liburan, darurat, dll.</p>
-                <button onClick={() => openAddGoal()} className="btn bg-green-600 text-white hover:bg-green-700 text-sm">+ Tambah Goal Pertama</button>
+                <button onClick={() => router.push('/savings-goals')} className="btn bg-green-600 text-white hover:bg-green-700 text-sm">+ Buat Tujuan Tabungan</button>
               </div>
             )}
           </div>
@@ -501,83 +368,6 @@ export default function WalletsPage() {
           <div className="flex gap-2">
             {editingTransfer && <button onClick={() => { deleteTransfer(editingTransfer.id); setShowTransferModal(false) }} className="btn btn-danger flex-1">Hapus</button>}
             <button onClick={saveTransfer} className="btn btn-primary flex-1">{editingTransfer ? 'Simpan' : 'Transfer'}</button>
-          </div>
-        </div>
-      </Modal>
-
-      {/* Savings Goal Modal */}
-      <Modal open={showGoalModal} onClose={() => { setShowGoalModal(false); setEditingGoal(null) }} title={editingGoal ? 'Edit Savings Goal' : 'Tambah Savings Goal'}>
-        <div className="space-y-4">
-          <div>
-            <label className="label">Dompet Tabungan</label>
-            <select className="input" value={gForm.wallet_id} onChange={(e) => setGForm({ ...gForm, wallet_id: e.target.value })}>
-              <option value="">Pilih dompet tabungan</option>
-              {tabunganWallets.map(w => <option key={w.id} value={w.id}>{w.icon} {w.name} ({formatCurrency(Number(w.balance))})</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="label">Nama Goal</label>
-            <input className="input" placeholder="mis. DP Rumah, Dana Darurat, Liburan Jepang" value={gForm.name} onChange={(e) => setGForm({ ...gForm, name: e.target.value })} />
-          </div>
-          <div>
-            <label className="label">Target Jumlah</label>
-            <input className="input text-lg font-bold" type="number" placeholder="0" value={gForm.target_amount} onChange={(e) => setGForm({ ...gForm, target_amount: e.target.value })} />
-          </div>
-          <div>
-            <label className="label">Target Tanggal (opsional)</label>
-            <input className="input" type="date" value={gForm.target_date} onChange={(e) => setGForm({ ...gForm, target_date: e.target.value })} />
-            {gForm.target_date && gForm.target_amount && gForm.wallet_id && (() => {
-              const wallet = wallets.find(w => w.id === gForm.wallet_id)
-              const current = Number(wallet?.balance || 0)
-              const remaining = Math.max(Number(gForm.target_amount) - current, 0)
-              const months = monthsUntil(gForm.target_date)
-              if (months > 0 && remaining > 0) return (
-                <p className="text-xs text-brand-600 mt-1.5 font-semibold">
-                  💡 Perlu menabung <span className="font-mono">{formatShort(remaining / months)}</span>/bulan selama {months} bulan
-                </p>
-              )
-            })()}
-          </div>
-          <div>
-            <label className="label">Icon</label>
-            <div className="grid grid-cols-8 gap-1.5 p-3 bg-surface-50 rounded-xl">
-              {GOAL_ICONS.map(icon => (
-                <button key={icon} onClick={() => setGForm({ ...gForm, icon })}
-                  className={`w-9 h-9 rounded-lg flex items-center justify-center text-xl transition-all ${gForm.icon === icon ? 'bg-brand-100 ring-2 ring-brand-400 scale-110' : 'hover:bg-surface-200'}`}>
-                  {icon}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div>
-            <label className="label">Warna</label>
-            <div className="flex gap-2 flex-wrap">
-              {GOAL_COLORS.map(c => (
-                <button key={c} onClick={() => setGForm({ ...gForm, color: c })}
-                  className="w-9 h-9 rounded-xl border-2 transition-all"
-                  style={{ background: c, borderColor: gForm.color === c ? '#fff' : 'transparent', boxShadow: gForm.color === c ? `0 0 0 2px ${c}` : 'none' }} />
-              ))}
-            </div>
-          </div>
-          {gForm.name && gForm.target_amount && (
-            <div className="p-3 rounded-xl border-l-4 bg-surface-50" style={{ borderColor: gForm.color }}>
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-xl">{gForm.icon}</span>
-                <span className="font-bold text-surface-800 text-sm">{gForm.name}</span>
-              </div>
-              <div className="h-2 bg-surface-200 rounded-full overflow-hidden">
-                {gForm.wallet_id && (() => {
-                  const wallet = wallets.find(w => w.id === gForm.wallet_id)
-                  const pct = Math.min((Number(wallet?.balance || 0) / Number(gForm.target_amount)) * 100, 100)
-                  return <div className="h-full rounded-full" style={{ width: `${pct}%`, background: gForm.color }} />
-                })()}
-              </div>
-              <p className="text-[10px] text-surface-400 mt-1">Target: {formatShort(Number(gForm.target_amount))}</p>
-            </div>
-          )}
-          <div className="flex gap-2">
-            {editingGoal && <button onClick={() => { deleteGoal(editingGoal.id); setShowGoalModal(false) }} className="btn btn-danger flex-1">Hapus</button>}
-            <button onClick={saveGoal} className="btn btn-primary flex-1">{editingGoal ? 'Simpan' : 'Buat Goal'}</button>
           </div>
         </div>
       </Modal>
