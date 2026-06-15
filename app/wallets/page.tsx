@@ -33,7 +33,7 @@ export default function WalletsPage() {
     const [w, t, g] = await Promise.all([
       supabase.from('wallets').select('*').eq('is_active', true).order('pocket').order('created_at'),
       supabase.from('transfers').select('*').order('date', { ascending: false }).order('created_at', { ascending: false }).limit(30),
-      supabase.from('savings_goals').select('*, wallets(*)').eq('is_completed', false).order('created_at'),
+      supabase.from('savings_goals').select('*').eq('is_completed', false).order('created_at'),
     ])
     setWallets(w.data || [])
     setTransfers(t.data || [])
