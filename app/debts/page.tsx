@@ -65,33 +65,12 @@ type ContactSummary = {
   net: number
 }
 
-// ─── Helper: adjust wallet balance ────────────────────────
-// delta positif = tambah saldo, negatif = kurangi saldo
-async function adjustWalletBalance(walletId: string, delta: number, wallets: Wallet[]) {
-  const wallet = wallets.find(w => w.id === walletId)
-  if (!wallet) return
-  await supabase.from('wallets')
-    .update({ balance: wallet.balance + delta })
-    .eq('id', walletId)
-}
-
 // ─── Helper: reverse semua transaksi debt yang ada ────────
-// Dipakai sebelum edit, supaya balance wallet lama dikembalikan dulu
-async function reverseDebtTransactions(debtId: string, wallets: Wallet[]) {
-  const { data: txns } = await supabase
-    .from('transactions')
-    .select('*')
-    .eq('debt_id', debtId)
-
-  if (!txns || txns.length === 0) return
-
-  for (const txn of txns) {
-    // Reverse: income → kurangi, expense → tambah
-    const reverseDelta = txn.type === 'income' ? -Number(txn.amount) : Number(txn.amount)
-    await adjustWalletBalance(txn.wallet_id, reverseDelta, wallets)
-  }
-
-  // Hapus semua transaksi terkait debt ini
+// Dipakai sebelum edit/hapus, supaya saldo wallet lama dikembalikan dulu.
+// PENTING: saldo wallet TIDAK diupdate manual di sini. Cukup hapus baris
+// transaksinya — trigger DB `on_transaction_change` sudah otomatis
+// mengembalikan saldo persis sekali. Update manual + trigger = dobel.
+async function reverseDebtTransactions(debtId: string) {
   await supabase.from('transactions').delete().eq('debt_id', debtId)
 }
 
@@ -232,39 +211,31 @@ export default function DebtsPage() {
 
     if (editingDebt) {
       // ── EDIT MODE ──
-      // Perlu load wallets fresh sebelum reverse, karena state mungkin stale
-      const { data: freshWallets } = await supabase.from('wallets').select('*').eq('is_active', true)
-      const allWallets = freshWallets || wallets
-
-      // 1. Reverse semua transaksi lama terkait debt ini (kembalikan saldo wallet lama)
-      await reverseDebtTransactions(editingDebt.id, allWallets)
+      // 1. Reverse semua transaksi lama terkait debt ini (hapus transaksi lama;
+      //    trigger DB otomatis mengembalikan saldo wallet lama, sekali saja)
+      await reverseDebtTransactions(editingDebt.id)
 
       // 2. Update data debt
       const { error } = await supabase.from('debts').update(payload).eq('id', editingDebt.id)
       if (error) { toast(error.message, '❌'); return }
 
-      // 3. Buat transaksi baru dengan wallet baru (jika ada wallet dipilih)
+      // 3. Buat transaksi baru dengan wallet baru (jika ada wallet dipilih).
+      //    Insert ini saja sudah cukup — trigger DB `on_transaction_change`
+      //    yang akan memotong/menambah saldo wallet, jadi TIDAK perlu update
+      //    saldo manual di sini (kalau dobel, saldo akan salah).
       if (debtForm.wallet_id) {
-        const freshWallet = allWallets.find(w => w.id === debtForm.wallet_id)
-        if (freshWallet) {
-          const delta = debtForm.type === 'receivable' ? -total : total
-          await supabase.from('wallets')
-            .update({ balance: freshWallet.balance + delta })
-            .eq('id', freshWallet.id)
-
-          await supabase.from('transactions').insert({
-            user_id: session.user.id,
-            wallet_id: debtForm.wallet_id,
-            debt_id: editingDebt.id,
-            type: debtForm.type === 'receivable' ? 'expense' : 'income',
-            amount: total,
-            description: debtForm.type === 'receivable'
-              ? `[Piutang] ${personName}${debtForm.description ? ' - ' + debtForm.description : ''}`
-              : `[Hutang] ${personName}${debtForm.description ? ' - ' + debtForm.description : ''}`,
-            date: new Date().toISOString().split('T')[0],
-            category_id: null,
-          })
-        }
+        await supabase.from('transactions').insert({
+          user_id: session.user.id,
+          wallet_id: debtForm.wallet_id,
+          debt_id: editingDebt.id,
+          type: debtForm.type === 'receivable' ? 'expense' : 'income',
+          amount: total,
+          description: debtForm.type === 'receivable'
+            ? `[Piutang] ${personName}${debtForm.description ? ' - ' + debtForm.description : ''}`
+            : `[Hutang] ${personName}${debtForm.description ? ' - ' + debtForm.description : ''}`,
+          date: new Date().toISOString().split('T')[0],
+          category_id: null,
+        })
       }
 
       toast('Diperbarui!', '✅')
@@ -277,30 +248,23 @@ export default function DebtsPage() {
         .single()
       if (error) { toast(error.message, '❌'); return }
 
-      // Adjust wallet balance dan catat transaksi
+      // Catat transaksi (jika ada wallet dipilih). Trigger DB
+      // `on_transaction_change` yang akan memotong/menambah saldo wallet
+      // secara otomatis — JANGAN update saldo manual di sini juga,
+      // nanti kepotong dobel.
       if (debtForm.wallet_id && newDebt) {
-        const { data: freshWallets } = await supabase.from('wallets').select('*').eq('is_active', true)
-        const allWallets = freshWallets || wallets
-        const wallet = allWallets.find(w => w.id === debtForm.wallet_id)
-        if (wallet) {
-          const delta = debtForm.type === 'receivable' ? -total : total
-          await supabase.from('wallets')
-            .update({ balance: wallet.balance + delta })
-            .eq('id', wallet.id)
-
-          await supabase.from('transactions').insert({
-            user_id: session.user.id,
-            wallet_id: debtForm.wallet_id,
-            debt_id: newDebt.id,
-            type: debtForm.type === 'receivable' ? 'expense' : 'income',
-            amount: total,
-            description: debtForm.type === 'receivable'
-              ? `[Piutang] ${personName}${debtForm.description ? ' - ' + debtForm.description : ''}`
-              : `[Hutang] ${personName}${debtForm.description ? ' - ' + debtForm.description : ''}`,
-            date: new Date().toISOString().split('T')[0],
-            category_id: null,
-          })
-        }
+        await supabase.from('transactions').insert({
+          user_id: session.user.id,
+          wallet_id: debtForm.wallet_id,
+          debt_id: newDebt.id,
+          type: debtForm.type === 'receivable' ? 'expense' : 'income',
+          amount: total,
+          description: debtForm.type === 'receivable'
+            ? `[Piutang] ${personName}${debtForm.description ? ' - ' + debtForm.description : ''}`
+            : `[Hutang] ${personName}${debtForm.description ? ' - ' + debtForm.description : ''}`,
+          date: new Date().toISOString().split('T')[0],
+          category_id: null,
+        })
       }
 
       toast(debtForm.type === 'debt' ? 'Utang dicatat!' : 'Piutang dicatat!', debtForm.type === 'debt' ? '💸' : '💰')
@@ -313,8 +277,7 @@ export default function DebtsPage() {
     if (!confirm('Hapus catatan ini?')) return
 
     // Reverse semua transaksi terkait sebelum hapus debt
-    const { data: freshWallets } = await supabase.from('wallets').select('*').eq('is_active', true)
-    await reverseDebtTransactions(id, freshWallets || wallets)
+    await reverseDebtTransactions(id)
 
     await supabase.from('debts').delete().eq('id', id)
     toast('Dihapus', '🗑️'); load()
@@ -348,31 +311,22 @@ export default function DebtsPage() {
     const isCompleted = newPaid >= Number(payingDebt.total_amount)
     await supabase.from('debts').update({ paid_amount: newPaid, is_completed: isCompleted }).eq('id', payingDebt.id)
 
-    // Adjust wallet balance saat catat bayar
+    // Catat transaksi pembayaran (jika ada wallet dipilih). Trigger DB
+    // `on_transaction_change` yang akan memotong/menambah saldo wallet —
+    // JANGAN update saldo manual juga, nanti dobel.
     if (payWalletId) {
-      const { data: freshWallets } = await supabase.from('wallets').select('*').eq('is_active', true)
-      const allWallets = freshWallets || wallets
-      const wallet = allWallets.find(w => w.id === payWalletId)
-      if (wallet) {
-        // Bayar hutang = uang keluar, terima piutang = uang masuk
-        const delta = payingDebt.type === 'debt' ? -amount : amount
-        await supabase.from('wallets')
-          .update({ balance: wallet.balance + delta })
-          .eq('id', wallet.id)
-
-        await supabase.from('transactions').insert({
-          user_id: session.user.id,
-          wallet_id: payWalletId,
-          debt_id: payingDebt.id,
-          type: payingDebt.type === 'debt' ? 'expense' : 'income',
-          amount,
-          description: payingDebt.type === 'debt'
-            ? `[Bayar Hutang] ${payingDebt.person_name}`
-            : `[Terima Piutang] ${payingDebt.person_name}`,
-          date: new Date().toISOString().split('T')[0],
-          category_id: null,
-        })
-      }
+      await supabase.from('transactions').insert({
+        user_id: session.user.id,
+        wallet_id: payWalletId,
+        debt_id: payingDebt.id,
+        type: payingDebt.type === 'debt' ? 'expense' : 'income',
+        amount,
+        description: payingDebt.type === 'debt'
+          ? `[Bayar Hutang] ${payingDebt.person_name}`
+          : `[Terima Piutang] ${payingDebt.person_name}`,
+        date: new Date().toISOString().split('T')[0],
+        category_id: null,
+      })
     }
 
     toast(isCompleted ? '🎉 Lunas!' : `Pembayaran ${formatCurrency(amount)} dicatat!`, isCompleted ? '🎉' : '✅')
