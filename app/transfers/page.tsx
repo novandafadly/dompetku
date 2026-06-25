@@ -13,14 +13,19 @@ type Transfer = {
   id: string
   user_id: string
   from_wallet_id: string
-  to_wallet_id: string
+  to_wallet_id: string | null
+  to_asset_id: string | null
+  savings_goal_id: string | null
   amount: number
   fee: number | null
   description: string | null
+  note: string | null
   date: string
   created_at: string
+  // enriched
   from_wallet?: Wallet
   to_wallet?: Wallet
+  to_asset_name?: string
 }
 
 type TransferForm = {
@@ -61,17 +66,32 @@ export default function TransfersPage() {
   useEffect(() => { load() }, [])
 
   async function load() {
-    const [t, w] = await Promise.all([
+    const [t, w, a] = await Promise.all([
       supabase
         .from('transfers')
-        .select('*, from_wallet:from_wallet_id(id, name, icon, pocket, balance), to_wallet:to_wallet_id(id, name, icon, pocket, balance)')
+        .select('*')
+        // ✅ Exclude top up / pencairan savings goals — bukan transfer murni
+        .is('savings_goal_id', null)
         .order('date', { ascending: false })
         .order('created_at', { ascending: false })
         .limit(200),
       supabase.from('wallets').select('*').eq('is_active', true).order('name'),
+      supabase.from('assets').select('id, name'),
     ])
-    setTransfers((t.data as any) || [])
-    setWallets(w.data || [])
+
+    const walletList = (w.data || []) as Wallet[]
+    const assetList = (a.data || []) as { id: string; name: string }[]
+
+    // Enrich manual — hindari PostgREST embed yang rawan schema-cache issue
+    const enriched = ((t.data || []) as Transfer[]).map(tr => ({
+      ...tr,
+      from_wallet: walletList.find(w => w.id === tr.from_wallet_id),
+      to_wallet: tr.to_wallet_id ? walletList.find(w => w.id === tr.to_wallet_id) : undefined,
+      to_asset_name: tr.to_asset_id ? assetList.find(a => a.id === tr.to_asset_id)?.name : undefined,
+    }))
+
+    setTransfers(enriched)
+    setWallets(walletList)
     setLoading(false)
   }
 
@@ -87,10 +107,10 @@ export default function TransfersPage() {
     setEditingId(tr.id)
     setForm({
       from_wallet_id: tr.from_wallet_id,
-      to_wallet_id: tr.to_wallet_id,
+      to_wallet_id: tr.to_wallet_id || '',
       amount: String(tr.amount),
       fee: String(tr.fee || 0),
-      description: tr.description || '',
+      description: tr.description || tr.note || '',
       date: tr.date,
     })
     setShowModal(true)
@@ -159,11 +179,10 @@ export default function TransfersPage() {
       if (filterWallet && tr.from_wallet_id !== filterWallet && tr.to_wallet_id !== filterWallet) return false
       if (search) {
         const q = search.toLowerCase()
-        return (
-          tr.description?.toLowerCase().includes(q) ||
-          (tr.from_wallet as any)?.name?.toLowerCase().includes(q) ||
-          (tr.to_wallet as any)?.name?.toLowerCase().includes(q)
-        )
+        const desc = (tr.description || tr.note || '').toLowerCase()
+        const from = (tr.from_wallet as any)?.name?.toLowerCase() || ''
+        const to = (tr.to_wallet as any)?.name?.toLowerCase() || tr.to_asset_name?.toLowerCase() || ''
+        return desc.includes(q) || from.includes(q) || to.includes(q)
       }
       return true
     })
@@ -177,6 +196,16 @@ export default function TransfersPage() {
   }, [transfers])
 
   const totalFee = useMemo(() => transfers.reduce((s, t) => s + Number(t.fee || 0), 0), [transfers])
+
+  // Group filtered transfers by date
+  const grouped = useMemo(() => {
+    const map: Record<string, Transfer[]> = {}
+    for (const tr of filtered) {
+      if (!map[tr.date]) map[tr.date] = []
+      map[tr.date].push(tr)
+    }
+    return Object.entries(map).sort(([a], [b]) => b.localeCompare(a))
+  }, [filtered])
 
   return (
     <AppShell>
@@ -244,67 +273,83 @@ export default function TransfersPage() {
           ))}
         </div>
       ) : filtered.length > 0 ? (
-        <div className="space-y-3">
-          {filtered.map(tr => {
-            const from = tr.from_wallet as any
-            const to = tr.to_wallet as any
-            const hasFee = Number(tr.fee || 0) > 0
-            return (
-              <div
-                key={tr.id}
-                className="card p-4 flex items-center gap-3 group cursor-pointer active:bg-surface-50"
-                onClick={() => openEdit(tr)}
-              >
-                {/* Icon */}
-                <div className="w-11 h-11 rounded-xl bg-blue-50 flex items-center justify-center text-xl flex-shrink-0">
-                  🔀
-                </div>
+        <div className="space-y-4">
+          {grouped.map(([date, items]) => (
+            <div key={date}>
+              {/* Date group header */}
+              <p className="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-2 px-1">
+                {formatDate(date)}
+              </p>
+              <div className="space-y-2">
+                {items.map(tr => {
+                  const from = tr.from_wallet as any
+                  const to = tr.to_wallet as any
+                  const isToAsset = !!tr.to_asset_id
+                  const hasFee = Number(tr.fee || 0) > 0
+                  const toLabel = isToAsset
+                    ? `📈 ${tr.to_asset_name || 'Aset'}`
+                    : `${getPocketLabel(to?.pocket)}${to?.icon || ''}${to?.name || '—'}`
 
-                {/* Info */}
-                <div className="flex-1 min-w-0">
-                  {/* Wallet names */}
-                  <div className="flex items-center gap-1.5 text-sm font-semibold text-surface-800 mb-0.5">
-                    <span className="truncate max-w-[90px]">
-                      {getPocketLabel(from?.pocket)}{from?.name || '—'}
-                    </span>
-                    <span className="text-brand-400 font-bold flex-shrink-0">→</span>
-                    <span className="truncate max-w-[90px]">
-                      {getPocketLabel(to?.pocket)}{to?.name || '—'}
-                    </span>
-                  </div>
-                  {/* Date & desc */}
-                  <div className="flex items-center gap-2 text-[10px] text-surface-400">
-                    <span>{formatDate(tr.date)}</span>
-                    {tr.description && (
-                      <>
-                        <span>·</span>
-                        <span className="truncate">{tr.description}</span>
-                      </>
-                    )}
-                    {hasFee && (
-                      <>
-                        <span>·</span>
-                        <span className="text-amber-600 font-semibold">Biaya: {formatShort(Number(tr.fee))}</span>
-                      </>
-                    )}
-                  </div>
-                </div>
+                  return (
+                    <div
+                      key={tr.id}
+                      className="card p-4 flex items-center gap-3 group cursor-pointer active:bg-surface-50"
+                      onClick={() => openEdit(tr)}
+                    >
+                      {/* Icon */}
+                      <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-xl flex-shrink-0 ${isToAsset ? 'bg-purple-50' : 'bg-blue-50'}`}>
+                        {isToAsset ? '📈' : '🔀'}
+                      </div>
 
-                {/* Amount + delete */}
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <p className="text-sm font-bold font-mono text-brand-600">
-                    {formatShort(Number(tr.amount))}
-                  </p>
-                  <button
-                    onClick={e => { e.stopPropagation(); deleteTransfer(tr) }}
-                    className="opacity-0 group-hover:opacity-100 w-7 h-7 rounded-lg hover:bg-red-50 text-surface-300 hover:text-red-500 flex items-center justify-center text-xs transition-all"
-                  >
-                    ✕
-                  </button>
-                </div>
+                      {/* Info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 text-sm font-semibold text-surface-800 mb-0.5">
+                          <span className="truncate max-w-[90px]">
+                            {getPocketLabel(from?.pocket)}{from?.icon || ''}{from?.name || '—'}
+                          </span>
+                          <span className="text-brand-400 font-bold flex-shrink-0">→</span>
+                          <span className="truncate max-w-[90px]">{toLabel}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-[10px] text-surface-400">
+                          {(tr.description || tr.note) && (
+                            <>
+                              <span className="truncate">{tr.description || tr.note}</span>
+                            </>
+                          )}
+                          {hasFee && (
+                            <>
+                              {(tr.description || tr.note) && <span>·</span>}
+                              <span className="text-amber-600 font-semibold">Biaya: {formatShort(Number(tr.fee))}</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Amount + delete */}
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <div className="text-right">
+                          <p className="text-sm font-bold font-mono text-brand-600">
+                            {formatShort(Number(tr.amount))}
+                          </p>
+                          {hasFee && (
+                            <p className="text-[10px] text-surface-400">
+                              -{formatShort(Number(tr.amount) + Number(tr.fee))} total
+                            </p>
+                          )}
+                        </div>
+                        <button
+                          onClick={e => { e.stopPropagation(); deleteTransfer(tr) }}
+                          className="opacity-0 group-hover:opacity-100 w-7 h-7 rounded-lg hover:bg-red-50 text-surface-300 hover:text-red-500 flex items-center justify-center text-xs transition-all"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
-            )
-          })}
+            </div>
+          ))}
         </div>
       ) : (
         <div className="card text-center py-20 text-surface-300">
@@ -389,6 +434,9 @@ export default function TransfersPage() {
                   </option>
                 ))}
             </select>
+            <p className="text-[10px] text-surface-400 mt-1">
+              Untuk setor ke aset (RDPU, dll), gunakan "Setor Dana" di halaman Aset
+            </p>
           </div>
 
           <div>
