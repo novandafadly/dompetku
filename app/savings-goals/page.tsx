@@ -189,29 +189,28 @@ export default function SavingsGoalsPage() {
     if (!topUpForm.from_wallet_id) { toast('Pilih dompet sumber!', '⚠️'); return }
 
     if (selectedGoal.asset_id) {
-      // Goal berbasis aset (mis. RDPU): catat sebagai pengeluaran dari wallet sumber,
-      // lalu tambahkan nilainya ke asset terkait.
-      const { error: txError } = await supabase.from('transactions').insert({
+      // Goal berbasis aset (mis. RDPU): catat sebagai transfer wallet → asset.
+      // Trigger update_wallet_balance_on_transfer otomatis:
+      //   - kurangi saldo from_wallet
+      //   - tambah assets.value (karena to_asset_id terisi, to_wallet_id = null)
+      const { error } = await supabase.from('transfers').insert({
         user_id: session.user.id,
-        wallet_id: topUpForm.from_wallet_id,
-        type: 'expense',
+        from_wallet_id: topUpForm.from_wallet_id,
+        to_wallet_id: null,
+        to_asset_id: selectedGoal.asset_id,
         amount,
-        description: `Tabungan: ${selectedGoal.name}`,
+        fee: 0,
+        note: `Tabungan: ${selectedGoal.name}`,
         date: new Date().toISOString().split('T')[0],
       })
-      if (txError) { toast(txError.message, '❌'); return }
+      if (error) { toast(error.message, '❌'); return }
 
       const newValue = Number(selectedGoal.assets?.value || 0) + amount
-      const { error: assetError } = await supabase.from('assets')
-        .update({ value: newValue })
-        .eq('id', selectedGoal.asset_id)
-      if (assetError) { toast(assetError.message, '❌'); return }
-
       const isCompleted = newValue >= Number(selectedGoal.target_amount)
       await supabase.from('savings_goals').update({ is_completed: isCompleted }).eq('id', selectedGoal.id)
 
       if (isCompleted) toast(`🎉 Target "${selectedGoal.name}" tercapai!`, '🎯')
-      else toast(`Ditambahkan ${formatCurrency(amount)}!`, '💰')
+      else toast(`Setor ${formatCurrency(amount)} ke aset berhasil!`, '📈')
     } else {
       // Goal berbasis wallet: top up = transfer dari wallet sumber ke wallet target goal.
       // Trigger update_wallet_balance_on_transfer otomatis update saldo kedua wallet.
