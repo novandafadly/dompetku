@@ -2,18 +2,16 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
-import type { Asset, InvestmentLot } from '@/lib/supabase'
+import type { Asset, InvestmentLot, Wallet } from '@/lib/supabase'
 import { formatCurrency, formatShort, formatDate, ASSET_ICONS } from '@/lib/utils'
 import AppShell from '@/components/AppShell'
 import Modal from '@/components/Modal'
 import { toast } from '@/components/Toast'
 
 // Fetch IDX stock price via Yahoo Finance (no API key needed)
-// Uses a CORS proxy since browser can't call Yahoo directly
 async function fetchStockPrice(ticker: string): Promise<number | null> {
   const symbol = ticker.includes('.') ? ticker : `${ticker}.JK`
   try {
-    // Try multiple CORS proxies in sequence
     const proxyUrls = [
       `https://api.allorigins.win/get?url=${encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`)}`,
       `https://corsproxy.io/?${encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`)}`,
@@ -45,8 +43,6 @@ type AssetForm = {
   ticker: string
 }
 
-const emptyAssetForm: AssetForm = { name: '', type: 'investment', value: '', description: '', purchase_date: '', ticker: '' }
-
 type LotForm = {
   action: 'buy' | 'sell'
   qty: string
@@ -55,35 +51,53 @@ type LotForm = {
   note: string
 }
 
+type SetorForm = {
+  from_wallet_id: string
+  amount: string
+  date: string
+  note: string
+}
+
+const emptyAssetForm: AssetForm = { name: '', type: 'investment', value: '', description: '', purchase_date: '', ticker: '' }
 const emptyLotForm: LotForm = { action: 'buy', qty: '', price: '', date: new Date().toISOString().split('T')[0], note: '' }
+const emptySetorForm: SetorForm = { from_wallet_id: '', amount: '', date: new Date().toISOString().split('T')[0], note: '' }
 
 export default function AssetsPage() {
   const [assets, setAssets] = useState<Asset[]>([])
+  const [wallets, setWallets] = useState<Wallet[]>([])
   const [lots, setLots] = useState<Record<string, InvestmentLot[]>>({})
   const [priceLoading, setPriceLoading] = useState<Record<string, boolean>>({})
 
   const [showAdd, setShowAdd] = useState(false)
   const [showLot, setShowLot] = useState(false)
   const [showLotHistory, setShowLotHistory] = useState(false)
+  const [showSetor, setShowSetor] = useState(false)
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null)
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null)
 
   const [form, setForm] = useState<AssetForm>(emptyAssetForm)
   const [lotForm, setLotForm] = useState<LotForm>(emptyLotForm)
+  const [setorForm, setSetorForm] = useState<SetorForm>(emptySetorForm)
   const [tab, setTab] = useState<'all' | 'stock' | 'other'>('all')
 
   useEffect(() => { load() }, [])
 
   async function load() {
-    const { data } = await supabase.from('assets').select('*').order('value', { ascending: false })
-    setAssets(data || [])
+    const [assetsRes, walletsRes] = await Promise.all([
+      supabase.from('assets').select('*').order('value', { ascending: false }),
+      supabase.from('wallets').select('*').eq('is_active', true).order('name'),
+    ])
+    const data = assetsRes.data || []
+    setAssets(data)
+    setWallets(walletsRes.data || [])
+
     // load lots for stock assets
-    const stockAssets = (data || []).filter(a => a.type === 'investment' && a.ticker)
+    const stockAssets = data.filter((a: Asset) => a.type === 'investment' && a.ticker)
     if (stockAssets.length > 0) {
       const { data: lotData } = await supabase
         .from('investment_lots')
         .select('*')
-        .in('asset_id', stockAssets.map(a => a.id))
+        .in('asset_id', stockAssets.map((a: Asset) => a.id))
         .order('date', { ascending: false })
       const grouped: Record<string, InvestmentLot[]> = {}
       for (const lot of lotData || []) {
@@ -152,6 +166,12 @@ export default function AssetsPage() {
     setShowLotHistory(true)
   }
 
+  function openSetor(a: Asset) {
+    setSelectedAsset(a)
+    setSetorForm(emptySetorForm)
+    setShowSetor(true)
+  }
+
   async function saveAsset() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
@@ -207,7 +227,6 @@ export default function AssetsPage() {
     const price = Number(lotForm.price)
     if (!qty || !price) { toast('Qty dan harga wajib diisi!', '⚠️'); return }
 
-    // Check sell qty
     if (lotForm.action === 'sell') {
       const currentQty = Number(selectedAsset.qty || 0)
       if (qty > currentQty) { toast(`Tidak bisa jual ${qty} lot — kamu hanya punya ${currentQty}`, '⚠️'); return }
@@ -236,10 +255,43 @@ export default function AssetsPage() {
     load()
   }
 
+  async function doSetor() {
+    if (!selectedAsset) return
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) return
+
+    const amount = Number(setorForm.amount)
+    if (!amount || amount <= 0) { toast('Masukkan jumlah setoran!', '⚠️'); return }
+    if (!setorForm.from_wallet_id) { toast('Pilih dompet sumber!', '⚠️'); return }
+
+    // Cek saldo wallet cukup
+    const wallet = wallets.find(w => w.id === setorForm.from_wallet_id)
+    if (wallet && Number(wallet.balance) < amount) {
+      toast(`Saldo ${wallet.name} tidak cukup (${formatCurrency(Number(wallet.balance))})`, '⚠️')
+      return
+    }
+
+    // Insert transfer → trigger otomatis kurangi wallet & tambah asset.value
+    const { error } = await supabase.from('transfers').insert({
+      user_id: session.user.id,
+      from_wallet_id: setorForm.from_wallet_id,
+      to_wallet_id: null,
+      to_asset_id: selectedAsset.id,
+      amount,
+      note: setorForm.note || `Setor ke ${selectedAsset.name}`,
+      date: setorForm.date,
+    })
+    if (error) { toast(error.message, '❌'); return }
+
+    toast(`✅ Setor ${formatCurrency(amount)} ke ${selectedAsset.name}!`, '📈')
+    setShowSetor(false)
+    setSetorForm(emptySetorForm)
+    load()
+  }
+
   const total = assets.reduce((s, a) => s + Number(a.value), 0)
   const stockAssets = assets.filter(a => a.type === 'investment' && a.ticker)
   const otherAssets = assets.filter(a => !(a.type === 'investment' && a.ticker))
-
   const displayed = tab === 'stock' ? stockAssets : tab === 'other' ? otherAssets : assets
 
   const totalPL = stockAssets.reduce((s, a) => {
@@ -320,7 +372,7 @@ export default function AssetsPage() {
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <div className="w-11 h-11 rounded-xl bg-amber-50 flex items-center justify-center text-xl">
-                    {isStock ? '📈' : ASSET_ICONS[a.type] || '📦'}
+                    {isStock ? '📈' : ASSET_ICONS?.[a.type] || '📦'}
                   </div>
                   {isStock && a.ticker && (
                     <div>
@@ -384,12 +436,23 @@ export default function AssetsPage() {
                   </div>
                 </>
               ) : (
-                /* Non-stock card */
+                /* Non-stock card (RDPU, properti, dll) */
                 <>
                   <p className="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-2">{a.type}</p>
                   <p className="text-xl font-extrabold font-mono text-surface-900">{formatCurrency(Number(a.value))}</p>
                   {a.description && <p className="text-xs text-surface-400 mt-1">{a.description}</p>}
                   {a.purchase_date && <p className="text-[10px] text-surface-300 mt-1">Dibeli: {formatDate(a.purchase_date)}</p>}
+
+                  {/* Tombol Setor untuk non-stock asset */}
+                  <div className="mt-3 pt-3 border-t border-surface-100">
+                    <button
+                      onClick={() => openSetor(a)}
+                      className="btn btn-secondary text-xs w-full py-2 hover:bg-blue-50 hover:text-blue-700 hover:border-blue-200 transition-colors"
+                    >
+                      📥 Setor Dana
+                    </button>
+                    <p className="text-[10px] text-surface-400 mt-1 text-center">Transfer dari dompet, nilai aset bertambah</p>
+                  </div>
                 </>
               )}
             </div>
@@ -409,7 +472,7 @@ export default function AssetsPage() {
           <div>
             <label className="label">Tipe Aset</label>
             <select className="input" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value, ticker: '' })}>
-              <option value="investment">📈 Investasi / Saham</option>
+              <option value="investment">📈 Investasi / RDPU / Reksa Dana</option>
               <option value="property">🏠 Properti</option>
               <option value="vehicle">🚗 Kendaraan</option>
               <option value="electronics">💻 Elektronik</option>
@@ -418,26 +481,33 @@ export default function AssetsPage() {
           </div>
           <div>
             <label className="label">Nama Aset</label>
-            <input className="input" placeholder={form.type === 'investment' ? 'mis. Bank Central Asia' : 'mis. Rumah BSD'} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+            <input className="input"
+              placeholder={form.type === 'investment' ? 'mis. Bibit RDPU, Bank Central Asia' : 'mis. Rumah BSD'}
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })} />
           </div>
           {form.type === 'investment' && (
             <div>
-              <label className="label">Kode Saham IDX (opsional)</label>
-              <div className="flex gap-2 items-center">
-                <input
-                  className="input uppercase"
-                  placeholder="mis. BBCA, GOTO, BBRI"
-                  value={form.ticker}
-                  onChange={(e) => setForm({ ...form, ticker: e.target.value.toUpperCase() })}
-                />
-              </div>
-              <p className="text-[10px] text-surface-400 mt-1">Isi ticker untuk fitur tracking harga real-time & sistem lot. Kosongkan untuk investasi manual.</p>
+              <label className="label">Kode Saham IDX <span className="text-surface-400 font-normal">(opsional — hanya untuk saham)</span></label>
+              <input
+                className="input uppercase"
+                placeholder="mis. BBCA, GOTO — kosongkan untuk RDPU/reksa dana"
+                value={form.ticker}
+                onChange={(e) => setForm({ ...form, ticker: e.target.value.toUpperCase() })}
+              />
+              <p className="text-[10px] text-surface-400 mt-1">
+                {form.ticker
+                  ? 'Ticker diisi → fitur tracking harga real-time & lot aktif'
+                  : 'Ticker kosong → nilai aset diupdate manual atau via setor dana'}
+              </p>
             </div>
           )}
           {(!form.ticker || form.type !== 'investment') && (
             <div>
-              <label className="label">Nilai {form.ticker ? '(otomatis dari lot)' : ''}</label>
-              <input className="input" type="number" placeholder="0" value={form.value} onChange={(e) => setForm({ ...form, value: e.target.value })} disabled={!!form.ticker && form.type === 'investment'} />
+              <label className="label">Nilai Awal</label>
+              <input className="input" type="number" placeholder="0" value={form.value}
+                onChange={(e) => setForm({ ...form, value: e.target.value })}
+                disabled={!!form.ticker && form.type === 'investment'} />
             </div>
           )}
           <div>
@@ -457,6 +527,84 @@ export default function AssetsPage() {
             <button onClick={saveAsset} className="btn btn-primary flex-1">{editingAsset ? 'Simpan Perubahan' : 'Simpan'}</button>
           </div>
         </div>
+      </Modal>
+
+      {/* Setor Dana Modal */}
+      <Modal open={showSetor} onClose={() => { setShowSetor(false); setSelectedAsset(null) }}
+        title={`📥 Setor Dana — ${selectedAsset?.name || ''}`}>
+        {selectedAsset && (
+          <div className="space-y-4">
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl">
+              <p className="text-xs font-bold text-blue-700 mb-1">Nilai Aset Saat Ini</p>
+              <p className="text-xl font-extrabold font-mono text-blue-900">{formatCurrency(Number(selectedAsset.value))}</p>
+              <p className="text-[10px] text-blue-500 mt-1">
+                Setelah setor: saldo dompet berkurang, nilai aset bertambah. Net worth tetap sama.
+              </p>
+            </div>
+
+            <div>
+              <label className="label">Dari Dompet</label>
+              <select className="input" value={setorForm.from_wallet_id} onChange={e => setSetorForm({...setorForm, from_wallet_id: e.target.value})}>
+                <option value="">Pilih dompet sumber</option>
+                {wallets.map(w => (
+                  <option key={w.id} value={w.id}>
+                    {(w as any).icon || '💳'} {w.name} ({formatShort(Number(w.balance))})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="label">Jumlah Setoran</label>
+              <input className="input text-xl font-bold" type="number" inputMode="numeric" placeholder="0"
+                value={setorForm.amount} onChange={e => setSetorForm({...setorForm, amount: e.target.value})} autoFocus />
+            </div>
+
+            {/* Quick amounts */}
+            <div className="flex gap-2">
+              {[100000, 500000, 1000000, 5000000].map(amt => (
+                <button key={amt} onClick={() => setSetorForm({...setorForm, amount: String(amt)})}
+                  className="btn btn-secondary text-xs flex-1 py-2">
+                  {formatShort(amt)}
+                </button>
+              ))}
+            </div>
+
+            <div>
+              <label className="label">Tanggal</label>
+              <input className="input" type="date" value={setorForm.date} onChange={e => setSetorForm({...setorForm, date: e.target.value})} />
+            </div>
+
+            <div>
+              <label className="label">Catatan (opsional)</label>
+              <input className="input" placeholder={`mis. Setor rutin ${selectedAsset.name}`}
+                value={setorForm.note} onChange={e => setSetorForm({...setorForm, note: e.target.value})} />
+            </div>
+
+            {Number(setorForm.amount) > 0 && (
+              <div className="p-3 bg-green-50 rounded-xl text-xs">
+                <p className="font-semibold text-green-700 mb-1">Setelah setor:</p>
+                <p className="text-green-600 font-mono font-bold">
+                  {formatCurrency(Number(selectedAsset.value) + Number(setorForm.amount))}
+                </p>
+                {setorForm.from_wallet_id && (() => {
+                  const wallet = wallets.find(w => w.id === setorForm.from_wallet_id)
+                  if (!wallet) return null
+                  return (
+                    <p className="text-green-500 mt-1">
+                      Saldo {wallet.name}: {formatCurrency(Number(wallet.balance))} → {formatCurrency(Number(wallet.balance) - Number(setorForm.amount))}
+                    </p>
+                  )
+                })()}
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <button onClick={() => setShowSetor(false)} className="btn btn-secondary flex-1">Batal</button>
+              <button onClick={doSetor} className="btn btn-primary flex-1">📥 Setor</button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {/* Add Lot Modal */}
