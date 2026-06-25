@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { Wallet } from '@/lib/supabase'
 import { formatCurrency, formatShort, formatDate } from '@/lib/utils'
@@ -33,6 +33,16 @@ type SavingsGoal = {
   assets?: AssetLite
 }
 
+// Riwayat top up / pencairan per goal
+type GoalHistory = {
+  id: string
+  date: string
+  amount: number
+  kind: 'topup' | 'withdraw'
+  source: 'transfer' | 'transaction'
+  wallet_name?: string   // dompet asal (topup) atau tujuan (withdraw)
+}
+
 type TargetType = 'wallet' | 'asset'
 
 type GoalForm = {
@@ -50,6 +60,13 @@ type GoalForm = {
 type TopUpForm = {
   amount: string
   from_wallet_id: string
+  date: string
+}
+
+type WithdrawForm = {
+  amount: string
+  to_wallet_id: string
+  date: string
 }
 
 const GOAL_ICONS = ['🎯','🏠','🚗','✈️','💍','🎓','💻','📱','🏖️','💰','🏋️','🎮','👶','🐶','🌿','⚕️','🎸','🛵']
@@ -60,28 +77,37 @@ const emptyForm: GoalForm = {
   target_date: '', icon: '🎯', color: '#22c55e', notes: '',
 }
 
-// Progress = saldo wallet ATAU nilai asset saat ini, selalu sinkron (tidak ada input manual)
+const today = () => new Date().toISOString().split('T')[0]
+
+// Progress = saldo wallet ATAU nilai asset saat ini, selalu sinkron
 function currentAmountOf(goal: SavingsGoal): number {
   if (goal.asset_id) return Number(goal.assets?.value || 0)
   return Number(goal.wallets?.balance || 0)
 }
 
 function daysLeft(dateStr: string): number {
-  const today = new Date(); today.setHours(0,0,0,0)
+  const now = new Date(); now.setHours(0,0,0,0)
   const target = new Date(dateStr); target.setHours(0,0,0,0)
-  return Math.ceil((target.getTime() - today.getTime()) / 86400000)
+  return Math.ceil((target.getTime() - now.getTime()) / 86400000)
 }
 
 export default function SavingsGoalsPage() {
   const [goals, setGoals] = useState<SavingsGoal[]>([])
   const [wallets, setWallets] = useState<Wallet[]>([])
   const [assets, setAssets] = useState<AssetLite[]>([])
+  const [goalHistories, setGoalHistories] = useState<Record<string, GoalHistory[]>>({})
+
   const [showModal, setShowModal] = useState(false)
   const [showTopUp, setShowTopUp] = useState(false)
+  const [showWithdraw, setShowWithdraw] = useState(false)
+  const [expandedHistory, setExpandedHistory] = useState<Record<string, boolean>>({})
+
   const [editing, setEditing] = useState<SavingsGoal | null>(null)
   const [selectedGoal, setSelectedGoal] = useState<SavingsGoal | null>(null)
   const [form, setForm] = useState<GoalForm>(emptyForm)
-  const [topUpForm, setTopUpForm] = useState<TopUpForm>({ amount: '', from_wallet_id: '' })
+  const [topUpForm, setTopUpForm] = useState<TopUpForm>({ amount: '', from_wallet_id: '', date: today() })
+  const [withdrawForm, setWithdrawForm] = useState<WithdrawForm>({ amount: '', to_wallet_id: '', date: today() })
+
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<'active' | 'done'>('active')
 
@@ -95,16 +121,78 @@ export default function SavingsGoalsPage() {
     ])
     const walletList = w.data || []
     const assetList = (a.data as any) || []
-    // Resolve relasi manual (hindari PostgREST embed assets/wallets yang rawan schema-cache issue)
     const enriched = ((g.data as any) || []).map((goal: SavingsGoal) => ({
       ...goal,
-      wallets: goal.wallet_id ? walletList.find(w => w.id === goal.wallet_id) : undefined,
+      wallets: goal.wallet_id ? walletList.find((w: Wallet) => w.id === goal.wallet_id) : undefined,
       assets: goal.asset_id ? assetList.find((a: AssetLite) => a.id === goal.asset_id) : undefined,
     }))
     setGoals(enriched)
     setWallets(walletList)
     setAssets(assetList)
     setLoading(false)
+
+    // Load history untuk semua goal sekaligus
+    await loadAllHistories(enriched as SavingsGoal[], walletList)
+  }
+
+  async function loadAllHistories(goalList: SavingsGoal[], walletList: Wallet[]) {
+    const ids = goalList.map(g => g.id)
+    if (ids.length === 0) return
+
+    const [trRes, txRes] = await Promise.all([
+      supabase.from('transfers')
+        .select('id, date, amount, savings_goal_id, savings_type, from_wallet_id, to_wallet_id, to_asset_id')
+        .in('savings_goal_id', ids)
+        .order('date', { ascending: false }),
+      supabase.from('transactions')
+        .select('id, date, amount, savings_goal_id, type, wallet_id')
+        .in('savings_goal_id', ids)
+        .order('date', { ascending: false }),
+    ])
+
+    const transfers = (trRes.data || []) as any[]
+    const transactions = (txRes.data || []) as any[]
+
+    const histories: Record<string, GoalHistory[]> = {}
+    ids.forEach(id => { histories[id] = [] })
+
+    for (const tr of transfers) {
+      if (!tr.savings_goal_id) continue
+      const isTopUp = tr.savings_type === 'topup'
+      // topup: from_wallet → to_wallet atau to_asset; withdraw: from_wallet (goal) → to_wallet
+      // Tampilkan dompet yang relevan buat user: asal untuk topup, tujuan untuk withdraw
+      const walletId = isTopUp ? tr.from_wallet_id : tr.to_wallet_id
+      const wallet = walletList.find(w => w.id === walletId)
+      histories[tr.savings_goal_id]?.push({
+        id: tr.id,
+        date: tr.date,
+        amount: Number(tr.amount),
+        kind: isTopUp ? 'topup' : 'withdraw',
+        source: 'transfer',
+        wallet_name: wallet?.name,
+      })
+    }
+
+    for (const tx of transactions) {
+      // transactions savings_goal_id: hanya dipakai untuk withdraw dari asset-based goal
+      if (!tx.savings_goal_id) continue
+      const wallet = walletList.find(w => w.id === tx.wallet_id)
+      histories[tx.savings_goal_id]?.push({
+        id: tx.id,
+        date: tx.date,
+        amount: Number(tx.amount),
+        kind: tx.type === 'income' ? 'withdraw' : 'topup',
+        source: 'transaction',
+        wallet_name: wallet?.name,
+      })
+    }
+
+    // Sort descending per goal
+    ids.forEach(id => {
+      histories[id].sort((a, b) => b.date.localeCompare(a.date))
+    })
+
+    setGoalHistories(histories)
   }
 
   function openAdd() {
@@ -138,8 +226,6 @@ export default function SavingsGoalsPage() {
     if (form.target_type === 'asset' && !form.asset_id) { toast('Pilih aset target!', '⚠️'); return }
 
     const target = Number(form.target_amount)
-
-    // Progress dihitung otomatis dari saldo wallet / nilai asset, bukan input manual
     const currentNow = form.target_type === 'asset'
       ? Number(assets.find(a => a.id === form.asset_id)?.value || 0)
       : Number(wallets.find(w => w.id === form.wallet_id)?.balance || 0)
@@ -177,8 +263,14 @@ export default function SavingsGoalsPage() {
 
   function openTopUp(goal: SavingsGoal) {
     setSelectedGoal(goal)
-    setTopUpForm({ amount: '', from_wallet_id: '' })
+    setTopUpForm({ amount: '', from_wallet_id: '', date: today() })
     setShowTopUp(true)
+  }
+
+  function openWithdraw(goal: SavingsGoal) {
+    setSelectedGoal(goal)
+    setWithdrawForm({ amount: '', to_wallet_id: '', date: today() })
+    setShowWithdraw(true)
   }
 
   async function doTopUp() {
@@ -187,12 +279,11 @@ export default function SavingsGoalsPage() {
     const amount = Number(topUpForm.amount)
     if (!amount || amount <= 0) { toast('Masukkan jumlah!', '⚠️'); return }
     if (!topUpForm.from_wallet_id) { toast('Pilih dompet sumber!', '⚠️'); return }
+    if (!topUpForm.date) { toast('Pilih tanggal!', '⚠️'); return }
 
     if (selectedGoal.asset_id) {
-      // Goal berbasis aset (mis. RDPU): catat sebagai transfer wallet → asset.
-      // Trigger update_wallet_balance_on_transfer otomatis:
-      //   - kurangi saldo from_wallet
-      //   - tambah assets.value (karena to_asset_id terisi, to_wallet_id = null)
+      // Asset-based goal: transfer dari wallet sumber ke aset target
+      // Trigger update_wallet_balance_on_transfer otomatis kurangi wallet + tambah asset.value
       const { error } = await supabase.from('transfers').insert({
         user_id: session.user.id,
         from_wallet_id: topUpForm.from_wallet_id,
@@ -200,20 +291,22 @@ export default function SavingsGoalsPage() {
         to_asset_id: selectedGoal.asset_id,
         amount,
         fee: 0,
+        description: `Tabungan: ${selectedGoal.name}`,
         note: `Tabungan: ${selectedGoal.name}`,
-        date: new Date().toISOString().split('T')[0],
+        date: topUpForm.date,
+        savings_goal_id: selectedGoal.id,
+        savings_type: 'topup',
       })
       if (error) { toast(error.message, '❌'); return }
 
       const newValue = Number(selectedGoal.assets?.value || 0) + amount
       const isCompleted = newValue >= Number(selectedGoal.target_amount)
       await supabase.from('savings_goals').update({ is_completed: isCompleted }).eq('id', selectedGoal.id)
-
       if (isCompleted) toast(`🎉 Target "${selectedGoal.name}" tercapai!`, '🎯')
-      else toast(`Setor ${formatCurrency(amount)} ke aset berhasil!`, '📈')
+      else toast(`Ditambahkan ${formatCurrency(amount)}!`, '💰')
+
     } else {
-      // Goal berbasis wallet: top up = transfer dari wallet sumber ke wallet target goal.
-      // Trigger update_wallet_balance_on_transfer otomatis update saldo kedua wallet.
+      // Wallet-based goal: transfer dari wallet sumber ke wallet goal
       if (topUpForm.from_wallet_id === selectedGoal.wallet_id) {
         toast('Dompet sumber tidak boleh sama dengan dompet target!', '⚠️'); return
       }
@@ -225,19 +318,80 @@ export default function SavingsGoalsPage() {
         fee: 0,
         description: `Tabungan: ${selectedGoal.name}`,
         note: `Tabungan: ${selectedGoal.name}`,
-        date: new Date().toISOString().split('T')[0],
+        date: topUpForm.date,
+        savings_goal_id: selectedGoal.id,
+        savings_type: 'topup',
       })
       if (error) { toast(error.message, '❌'); return }
 
       const newAmount = currentAmountOf(selectedGoal) + amount
       const isCompleted = newAmount >= Number(selectedGoal.target_amount)
       await supabase.from('savings_goals').update({ is_completed: isCompleted }).eq('id', selectedGoal.id)
-
       if (isCompleted) toast(`🎉 Target "${selectedGoal.name}" tercapai!`, '🎯')
       else toast(`Ditambahkan ${formatCurrency(amount)}!`, '💰')
     }
 
     setShowTopUp(false); load()
+  }
+
+  async function doWithdraw() {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session || !selectedGoal) return
+    const amount = Number(withdrawForm.amount)
+    const maxAmount = currentAmountOf(selectedGoal)
+    if (!amount || amount <= 0) { toast('Masukkan jumlah!', '⚠️'); return }
+    if (amount > maxAmount) { toast(`Maksimal pencairan ${formatCurrency(maxAmount)}!`, '⚠️'); return }
+    if (!withdrawForm.to_wallet_id) { toast('Pilih dompet tujuan!', '⚠️'); return }
+    if (!withdrawForm.date) { toast('Pilih tanggal!', '⚠️'); return }
+
+    if (selectedGoal.asset_id) {
+      // Asset-based goal: income ke wallet tujuan + kurangi nilai aset
+      const { error: txError } = await supabase.from('transactions').insert({
+        user_id: session.user.id,
+        wallet_id: withdrawForm.to_wallet_id,
+        type: 'income',
+        amount,
+        description: `Pencairan: ${selectedGoal.name}`,
+        date: withdrawForm.date,
+        savings_goal_id: selectedGoal.id,
+      })
+      if (txError) { toast(txError.message, '❌'); return }
+
+      const newValue = Number(selectedGoal.assets?.value || 0) - amount
+      const { error: assetError } = await supabase.from('assets').update({ value: Math.max(0, newValue) }).eq('id', selectedGoal.asset_id)
+      if (assetError) { toast(assetError.message, '❌'); return }
+
+      await supabase.from('savings_goals').update({ is_completed: false }).eq('id', selectedGoal.id)
+      toast(`Dicairkan ${formatCurrency(amount)} ke ${wallets.find(w => w.id === withdrawForm.to_wallet_id)?.name}`, '💸')
+
+    } else {
+      // Wallet-based goal: transfer dari wallet goal ke dompet tujuan
+      if (withdrawForm.to_wallet_id === selectedGoal.wallet_id) {
+        toast('Dompet tujuan tidak boleh sama dengan dompet goal!', '⚠️'); return
+      }
+      const { error } = await supabase.from('transfers').insert({
+        user_id: session.user.id,
+        from_wallet_id: selectedGoal.wallet_id,
+        to_wallet_id: withdrawForm.to_wallet_id,
+        amount,
+        fee: 0,
+        description: `Pencairan: ${selectedGoal.name}`,
+        note: `Pencairan: ${selectedGoal.name}`,
+        date: withdrawForm.date,
+        savings_goal_id: selectedGoal.id,
+        savings_type: 'withdraw',
+      })
+      if (error) { toast(error.message, '❌'); return }
+
+      // Kalau setelah withdraw sudah tidak completed lagi
+      const newAmount = currentAmountOf(selectedGoal) - amount
+      if (newAmount < Number(selectedGoal.target_amount)) {
+        await supabase.from('savings_goals').update({ is_completed: false }).eq('id', selectedGoal.id)
+      }
+      toast(`Dicairkan ${formatCurrency(amount)} ke ${wallets.find(w => w.id === withdrawForm.to_wallet_id)?.name}`, '💸')
+    }
+
+    setShowWithdraw(false); load()
   }
 
   async function toggleComplete(goal: SavingsGoal) {
@@ -257,12 +411,13 @@ export default function SavingsGoalsPage() {
     const remaining = Number(goal.target_amount) - current
     const dl = goal.target_date ? daysLeft(goal.target_date) : null
     const isOverdue = dl !== null && dl < 0 && !goal.is_completed
-    const monthlyNeeded = dl && dl > 0 && remaining > 0
-      ? Math.ceil(remaining / (dl / 30))
-      : null
+    const monthlyNeeded = dl && dl > 0 && remaining > 0 ? Math.ceil(remaining / (dl / 30)) : null
+    const history = goalHistories[goal.id] || []
+    const isHistoryOpen = !!expandedHistory[goal.id]
 
     return (
       <div className="card p-4 group">
+        {/* Header */}
         <div className="flex items-start gap-3 mb-3">
           <div className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl flex-shrink-0"
             style={{ background: goal.color + '20' }}>
@@ -274,7 +429,9 @@ export default function SavingsGoalsPage() {
               {goal.is_completed && <span className="badge bg-green-100 text-green-700">✓ Selesai</span>}
               {isOverdue && <span className="badge bg-red-100 text-red-600">Terlambat</span>}
             </div>
-            <p className="text-xs text-surface-500">{goal.asset_id ? `📈 ${(goal.assets as any)?.name || '—'}` : ((goal.wallets as any)?.name || '—')}</p>
+            <p className="text-xs text-surface-500">
+              {goal.asset_id ? `📈 ${(goal.assets as any)?.name || '—'}` : ((goal.wallets as any)?.name || '—')}
+            </p>
             {goal.target_date && (
               <p className={`text-[10px] font-semibold mt-0.5 ${isOverdue ? 'text-red-500' : dl! <= 30 ? 'text-amber-600' : 'text-surface-400'}`}>
                 {isOverdue ? `⚠️ Lewat ${Math.abs(dl!)} hari` : `📅 ${dl} hari lagi (${formatDate(goal.target_date)})`}
@@ -307,20 +464,65 @@ export default function SavingsGoalsPage() {
         </div>
 
         {/* Actions */}
-        {!goal.is_completed && (
-          <div className="flex gap-2">
+        {!goal.is_completed ? (
+          <div className="flex gap-2 mb-3">
             <button onClick={() => openTopUp(goal)} className="btn btn-primary text-xs flex-1 py-2">
-              + Top Up
+              💰 Top Up
             </button>
-            <button onClick={() => openEdit(goal)} className="btn btn-secondary text-xs w-10 p-0">✏️</button>
-            <button onClick={() => toggleComplete(goal)} className="btn btn-secondary text-xs w-10 p-0" title="Tandai selesai">✓</button>
-            <button onClick={() => deleteGoal(goal.id)} className="btn btn-secondary text-xs w-10 p-0 hover:bg-red-50 hover:text-red-500">✕</button>
+            <button onClick={() => openWithdraw(goal)} className="btn btn-secondary text-xs flex-1 py-2"
+              disabled={current <= 0} title={current <= 0 ? 'Belum ada saldo terkumpul' : 'Cairkan tabungan'}>
+              💸 Cairkan
+            </button>
+            <button onClick={() => openEdit(goal)} className="btn btn-secondary text-xs w-9 p-0">✏️</button>
+            <button onClick={() => toggleComplete(goal)} className="btn btn-secondary text-xs w-9 p-0" title="Tandai selesai">✓</button>
+            <button onClick={() => deleteGoal(goal.id)} className="btn btn-secondary text-xs w-9 p-0 hover:bg-red-50 hover:text-red-500">✕</button>
+          </div>
+        ) : (
+          <div className="flex gap-2 mb-3">
+            <button onClick={() => openWithdraw(goal)} className="btn btn-primary text-xs flex-1 py-2"
+              disabled={current <= 0}>
+              💸 Cairkan
+            </button>
+            <button onClick={() => toggleComplete(goal)} className="btn btn-secondary text-xs flex-1 py-2">Buka Kembali</button>
+            <button onClick={() => deleteGoal(goal.id)} className="btn btn-secondary text-xs w-9 p-0 hover:bg-red-50 hover:text-red-500">✕</button>
           </div>
         )}
-        {goal.is_completed && (
-          <div className="flex gap-2">
-            <button onClick={() => toggleComplete(goal)} className="btn btn-secondary text-xs flex-1 py-2">Tandai Belum Selesai</button>
-            <button onClick={() => deleteGoal(goal.id)} className="btn btn-secondary text-xs w-10 p-0 hover:bg-red-50 hover:text-red-500">✕</button>
+
+        {/* History toggle */}
+        <button
+          onClick={() => setExpandedHistory(prev => ({ ...prev, [goal.id]: !prev[goal.id] }))}
+          className="w-full flex items-center justify-between text-[11px] font-semibold text-surface-500 hover:text-surface-700 py-1.5 border-t border-surface-100 transition-colors"
+        >
+          <span>📋 Riwayat ({history.length})</span>
+          <span className="text-surface-400">{isHistoryOpen ? '▲' : '▼'}</span>
+        </button>
+
+        {/* History list */}
+        {isHistoryOpen && (
+          <div className="mt-2 space-y-1.5">
+            {history.length === 0 ? (
+              <p className="text-[11px] text-surface-400 text-center py-3">Belum ada riwayat transaksi</p>
+            ) : (
+              history.map(h => (
+                <div key={h.id} className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg bg-surface-50">
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs flex-shrink-0 ${
+                    h.kind === 'topup' ? 'bg-green-100' : 'bg-orange-100'
+                  }`}>
+                    {h.kind === 'topup' ? '↑' : '↓'}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[11px] font-semibold text-surface-700">
+                      {h.kind === 'topup' ? 'Top Up' : 'Pencairan'}
+                      {h.wallet_name && <span className="font-normal text-surface-400"> · {h.kind === 'topup' ? 'dari' : 'ke'} {h.wallet_name}</span>}
+                    </p>
+                    <p className="text-[10px] text-surface-400">{formatDate(h.date)}</p>
+                  </div>
+                  <p className={`text-xs font-bold font-mono ${h.kind === 'topup' ? 'text-green-600' : 'text-orange-500'}`}>
+                    {h.kind === 'topup' ? '+' : '-'}{formatShort(h.amount)}
+                  </p>
+                </div>
+              ))
+            )}
           </div>
         )}
       </div>
@@ -404,11 +606,10 @@ export default function SavingsGoalsPage() {
         </div>
       )}
 
-      {/* ── Add/Edit Modal ── */}
+      {/* ── Add/Edit Goal Modal ── */}
       <Modal open={showModal} onClose={() => { setShowModal(false); setEditing(null) }}
         title={editing ? 'Edit Tujuan' : 'Tambah Tujuan Tabungan'}>
         <div className="space-y-4">
-          {/* Icon & color */}
           <div>
             <label className="label">Icon</label>
             <div className="flex flex-wrap gap-1.5">
@@ -452,7 +653,7 @@ export default function SavingsGoalsPage() {
               <label className="label">Dompet Target</label>
               <select className="input" value={form.wallet_id} onChange={e => setForm({...form, wallet_id: e.target.value})}>
                 <option value="">Pilih dompet</option>
-                {wallets.map(w => <option key={w.id} value={w.id}>{w.icon || '💳'} {w.name} ({formatShort(Number(w.balance))})</option>)}
+                {wallets.map(w => <option key={w.id} value={w.id}>{(w as any).icon || '💳'} {w.name} ({formatShort(Number(w.balance))})</option>)}
               </select>
               <p className="text-[10px] text-surface-400 mt-1">Progress otomatis mengikuti saldo dompet ini</p>
             </div>
@@ -461,7 +662,7 @@ export default function SavingsGoalsPage() {
               <label className="label">Aset Target</label>
               <select className="input" value={form.asset_id} onChange={e => setForm({...form, asset_id: e.target.value})}>
                 <option value="">Pilih aset</option>
-                {assets.map(a => <option key={a.id} value={a.id}>{a.icon || '📈'} {a.name} ({formatShort(Number(a.value))})</option>)}
+                {assets.map(a => <option key={a.id} value={a.id}>{(a as any).icon || '📈'} {a.name} ({formatShort(Number(a.value))})</option>)}
               </select>
               <p className="text-[10px] text-surface-400 mt-1">Progress otomatis mengikuti nilai aset ini (mis. RDPU)</p>
             </div>
@@ -486,81 +687,157 @@ export default function SavingsGoalsPage() {
       </Modal>
 
       {/* ── Top Up Modal ── */}
-      <Modal open={showTopUp && !!selectedGoal} onClose={() => setShowTopUp(false)} title={`Top Up — ${selectedGoal?.name}`}>
+      <Modal open={showTopUp && !!selectedGoal} onClose={() => setShowTopUp(false)} title={`💰 Top Up — ${selectedGoal?.name}`}>
         {selectedGoal && (() => {
           const current = currentAmountOf(selectedGoal)
           const sourceWallets = wallets.filter(w => w.id !== selectedGoal.wallet_id)
           return (
-          <div className="space-y-4">
-            <div className="p-3 rounded-xl" style={{ background: selectedGoal.color + '15' }}>
-              <div className="flex justify-between text-xs mb-2">
-                <span className="text-surface-500">Progress saat ini</span>
-                <span className="font-bold" style={{ color: selectedGoal.color }}>
-                  {((current / Number(selectedGoal.target_amount)) * 100).toFixed(0)}%
-                </span>
+            <div className="space-y-4">
+              {/* Progress snapshot */}
+              <div className="p-3 rounded-xl" style={{ background: selectedGoal.color + '15' }}>
+                <div className="flex justify-between text-xs mb-2">
+                  <span className="text-surface-500">Progress saat ini</span>
+                  <span className="font-bold" style={{ color: selectedGoal.color }}>
+                    {((current / Number(selectedGoal.target_amount)) * 100).toFixed(0)}%
+                  </span>
+                </div>
+                <div className="progress-bar h-2">
+                  <div className="progress-fill" style={{
+                    width: `${Math.min((current / Number(selectedGoal.target_amount)) * 100, 100)}%`,
+                    background: selectedGoal.color
+                  }} />
+                </div>
+                <div className="flex justify-between text-xs mt-2">
+                  <span className="text-surface-500">Terkumpul: <span className="font-bold">{formatCurrency(current)}</span></span>
+                  <span className="text-surface-500">Target: <span className="font-bold">{formatCurrency(Number(selectedGoal.target_amount))}</span></span>
+                </div>
               </div>
-              <div className="progress-bar h-2">
-                <div className="progress-fill" style={{
-                  width: `${Math.min((current / Number(selectedGoal.target_amount)) * 100, 100)}%`,
-                  background: selectedGoal.color
-                }} />
+
+              <div>
+                <label className="label">Tanggal</label>
+                <input className="input" type="date" value={topUpForm.date} onChange={e => setTopUpForm({...topUpForm, date: e.target.value})} />
               </div>
-              <div className="flex justify-between text-xs mt-2">
-                <span className="text-surface-500">Terkumpul: <span className="font-bold">{formatCurrency(current)}</span></span>
-                <span className="text-surface-500">Target: <span className="font-bold">{formatCurrency(Number(selectedGoal.target_amount))}</span></span>
+
+              <div>
+                <label className="label">Jumlah Top Up</label>
+                <input className="input text-xl font-bold" type="number" inputMode="numeric" placeholder="0"
+                  value={topUpForm.amount} onChange={e => setTopUpForm({...topUpForm, amount: e.target.value})} autoFocus />
               </div>
-            </div>
 
-            <div>
-              <label className="label">Jumlah Top Up</label>
-              <input className="input text-xl font-bold" type="number" inputMode="numeric" placeholder="0"
-                value={topUpForm.amount} onChange={e => setTopUpForm({...topUpForm, amount: e.target.value})} autoFocus />
-            </div>
+              {/* Quick amounts */}
+              <div className="flex gap-2">
+                {[100000, 500000, 1000000].map(amt => (
+                  <button key={amt} onClick={() => setTopUpForm({...topUpForm, amount: String(amt)})}
+                    className="btn btn-secondary text-xs flex-1 py-2">{formatShort(amt)}</button>
+                ))}
+                <button onClick={() => {
+                  const rem = Number(selectedGoal.target_amount) - current
+                  setTopUpForm({...topUpForm, amount: String(rem > 0 ? rem : 0)})
+                }} className="btn btn-secondary text-xs flex-1 py-2">Lunas</button>
+              </div>
 
-            {/* Quick amounts */}
-            <div className="flex gap-2">
-              {[100000, 500000, 1000000].map(amt => (
-                <button key={amt} onClick={() => setTopUpForm({...topUpForm, amount: String(amt)})}
-                  className="btn btn-secondary text-xs flex-1 py-2">
-                  {formatShort(amt)}
-                </button>
-              ))}
-              <button onClick={() => {
-                const rem = Number(selectedGoal.target_amount) - current
-                setTopUpForm({...topUpForm, amount: String(rem > 0 ? rem : 0)})
-              }} className="btn btn-secondary text-xs flex-1 py-2">Lunas</button>
-            </div>
-
-            <div>
-              <label className="label">Dari Dompet</label>
-              <select className="input" value={topUpForm.from_wallet_id} onChange={e => setTopUpForm({...topUpForm, from_wallet_id: e.target.value})}>
-                <option value="">Pilih dompet sumber</option>
-                {sourceWallets.map(w => <option key={w.id} value={w.id}>{w.icon || '💳'} {w.name} ({formatShort(Number(w.balance))})</option>)}
-              </select>
-              <p className="text-[10px] text-surface-400 mt-1">
-                {selectedGoal.asset_id
-                  ? 'Akan dicatat sebagai pengeluaran dan menambah nilai aset target'
-                  : 'Akan ditransfer ke dompet target tujuan ini'}
-              </p>
-            </div>
-
-            {Number(topUpForm.amount) > 0 && (
-              <div className="p-3 bg-green-50 rounded-xl text-xs">
-                <p className="font-semibold text-green-700 mb-1">Setelah top up:</p>
-                <p className="text-green-600">
-                  {formatCurrency(current + Number(topUpForm.amount))} /&nbsp;
-                  {formatCurrency(Number(selectedGoal.target_amount))} &nbsp;
-                  ({Math.min(((current + Number(topUpForm.amount)) / Number(selectedGoal.target_amount)) * 100, 100).toFixed(0)}%)
-                  {current + Number(topUpForm.amount) >= Number(selectedGoal.target_amount) && ' 🎉 TARGET TERCAPAI!'}
+              <div>
+                <label className="label">Dari Dompet</label>
+                <select className="input" value={topUpForm.from_wallet_id} onChange={e => setTopUpForm({...topUpForm, from_wallet_id: e.target.value})}>
+                  <option value="">Pilih dompet sumber</option>
+                  {sourceWallets.map(w => <option key={w.id} value={w.id}>{(w as any).icon || '💳'} {w.name} ({formatShort(Number(w.balance))})</option>)}
+                </select>
+                <p className="text-[10px] text-surface-400 mt-1">
+                  {selectedGoal.asset_id
+                    ? 'Akan dicatat sebagai pengeluaran dan menambah nilai aset target'
+                    : 'Akan ditransfer ke dompet target tujuan ini'}
                 </p>
               </div>
-            )}
 
-            <div className="flex gap-2">
-              <button onClick={() => setShowTopUp(false)} className="btn btn-secondary flex-1">Batal</button>
-              <button onClick={doTopUp} className="btn btn-primary flex-1">💰 Top Up</button>
+              {Number(topUpForm.amount) > 0 && (
+                <div className="p-3 bg-green-50 rounded-xl text-xs">
+                  <p className="font-semibold text-green-700 mb-1">Setelah top up:</p>
+                  <p className="text-green-600">
+                    {formatCurrency(current + Number(topUpForm.amount))} / {formatCurrency(Number(selectedGoal.target_amount))}&nbsp;
+                    ({Math.min(((current + Number(topUpForm.amount)) / Number(selectedGoal.target_amount)) * 100, 100).toFixed(0)}%)
+                    {current + Number(topUpForm.amount) >= Number(selectedGoal.target_amount) && ' 🎉 TARGET TERCAPAI!'}
+                  </p>
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <button onClick={() => setShowTopUp(false)} className="btn btn-secondary flex-1">Batal</button>
+                <button onClick={doTopUp} className="btn btn-primary flex-1">💰 Top Up</button>
+              </div>
             </div>
-          </div>
+          )
+        })()}
+      </Modal>
+
+      {/* ── Withdraw Modal ── */}
+      <Modal open={showWithdraw && !!selectedGoal} onClose={() => setShowWithdraw(false)} title={`💸 Cairkan — ${selectedGoal?.name}`}>
+        {selectedGoal && (() => {
+          const current = currentAmountOf(selectedGoal)
+          const targetWallets = wallets.filter(w => w.id !== selectedGoal.wallet_id)
+          const withdrawAmt = Number(withdrawForm.amount)
+          return (
+            <div className="space-y-4">
+              {/* Saldo tersedia */}
+              <div className="p-3 rounded-xl bg-orange-50 border border-orange-100">
+                <p className="text-xs text-surface-500 mb-0.5">Saldo terkumpul (maks. pencairan)</p>
+                <p className="text-xl font-extrabold font-mono text-orange-600">{formatCurrency(current)}</p>
+              </div>
+
+              <div>
+                <label className="label">Tanggal</label>
+                <input className="input" type="date" value={withdrawForm.date} onChange={e => setWithdrawForm({...withdrawForm, date: e.target.value})} />
+              </div>
+
+              <div>
+                <label className="label">Jumlah Pencairan</label>
+                <input className="input text-xl font-bold" type="number" inputMode="numeric" placeholder="0"
+                  max={current}
+                  value={withdrawForm.amount} onChange={e => setWithdrawForm({...withdrawForm, amount: e.target.value})} autoFocus />
+                {withdrawAmt > current && (
+                  <p className="text-xs text-red-500 mt-1">⚠️ Melebihi saldo terkumpul ({formatCurrency(current)})</p>
+                )}
+              </div>
+
+              {/* Quick amounts */}
+              <div className="flex gap-2">
+                {[25, 50, 75].map(pct => (
+                  <button key={pct} onClick={() => setWithdrawForm({...withdrawForm, amount: String(Math.floor(current * pct / 100))})}
+                    className="btn btn-secondary text-xs flex-1 py-2">{pct}%</button>
+                ))}
+                <button onClick={() => setWithdrawForm({...withdrawForm, amount: String(current)})}
+                  className="btn btn-secondary text-xs flex-1 py-2">Semua</button>
+              </div>
+
+              <div>
+                <label className="label">Ke Dompet</label>
+                <select className="input" value={withdrawForm.to_wallet_id} onChange={e => setWithdrawForm({...withdrawForm, to_wallet_id: e.target.value})}>
+                  <option value="">Pilih dompet tujuan</option>
+                  {targetWallets.map(w => <option key={w.id} value={w.id}>{(w as any).icon || '💳'} {w.name} ({formatShort(Number(w.balance))})</option>)}
+                </select>
+                <p className="text-[10px] text-surface-400 mt-1">
+                  {selectedGoal.asset_id
+                    ? 'Akan dicatat sebagai pemasukan dan mengurangi nilai aset'
+                    : 'Akan ditransfer dari dompet goal ke dompet tujuan ini'}
+                </p>
+              </div>
+
+              {withdrawAmt > 0 && withdrawAmt <= current && (
+                <div className="p-3 bg-orange-50 rounded-xl text-xs">
+                  <p className="font-semibold text-orange-700 mb-1">Setelah pencairan:</p>
+                  <p className="text-orange-600">
+                    Sisa tabungan: {formatCurrency(current - withdrawAmt)}&nbsp;
+                    ({((current - withdrawAmt) / Number(selectedGoal.target_amount) * 100).toFixed(0)}% dari target)
+                  </p>
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <button onClick={() => setShowWithdraw(false)} className="btn btn-secondary flex-1">Batal</button>
+                <button onClick={doWithdraw} className="btn btn-primary flex-1" disabled={withdrawAmt <= 0 || withdrawAmt > current}>
+                  💸 Cairkan
+                </button>
+              </div>
+            </div>
           )
         })()}
       </Modal>
