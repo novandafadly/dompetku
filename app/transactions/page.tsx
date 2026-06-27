@@ -56,11 +56,20 @@ export default function TransactionsPage() {
   const [form, setForm] = useState<FormState>(emptyForm)
   const [activeTab, setActiveTab] = useState<ViewTab>('personal')
 
+  // ── Quick Add state ───────────────────────────────────────
+  const [showQuick, setShowQuick] = useState(false)
+  const [quickType, setQuickType] = useState<'expense' | 'income'>('expense')
+  const [quickAmount, setQuickAmount] = useState('')
+  const [quickWallet, setQuickWallet] = useState('')
+  const [quickCat, setQuickCat] = useState('')
+  const [quickSub, setQuickSub] = useState('')
+  const [quickDesc, setQuickDesc] = useState('')
+  const [quickSaving, setQuickSaving] = useState(false)
+
   useEffect(() => { load() }, [])
 
   async function load() {
-    const { data: { user: sessionUser } } = await supabase.auth.getUser()
-    const session = sessionUser ? { user: sessionUser } : null
+    const { data: { session } } = await supabase.auth.getSession()
     const [t, w, c, tr] = await Promise.all([
       supabase.from('transactions').select('*, categories(*), wallets(*)').order('date', { ascending: false }).order('created_at', { ascending: false }).limit(300),
       supabase.from('wallets').select('*').eq('is_active', true),
@@ -138,11 +147,10 @@ export default function TransactionsPage() {
   }
 
   async function saveTransaction() {
-    const { data: { user } } = await supabase.auth.getUser()
-    const session = user ? { user } : null
+    const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
     const amount = Number(form.amount)
-    if (!amount || amount <= 0 || !form.wallet_id) { toast('Lengkapi data!', '⚠️'); return }
+    if (!amount || !form.wallet_id) { toast('Lengkapi data!', '⚠️'); return }
     const isInvest = form.type === 'expense' && form.category_id && isInvestmentCategory(form.category_id)
     const selectedWallet = wallets.find(w => w.id === form.wallet_id)
     const isKantor = selectedWallet?.pocket === 'kantor'
@@ -209,8 +217,7 @@ export default function TransactionsPage() {
 
   async function confirmReimburse() {
     if (!reimburseTarget) return
-    const { data: { user } } = await supabase.auth.getUser()
-    const session = user ? { user } : null
+    const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
     if (!reimburseForm.wallet_id) { toast('Pilih wallet tujuan dulu!', '⚠️'); return }
 
@@ -306,6 +313,82 @@ export default function TransactionsPage() {
     setSearch('')
   }
 
+
+  function exportCSV() {
+    const rows = [
+      ['Tanggal', 'Tipe', 'Jumlah', 'Dompet', 'Kategori', 'Subkategori', 'Keterangan', 'Trip'],
+      ...filtered.map(t => [
+        t.date,
+        t.type === 'income' ? 'Pemasukan' : 'Pengeluaran',
+        Number(t.amount),
+        (t as any).wallets?.name || '',
+        (t as any).categories?.name || '',
+        (t as any).subcategories?.name || '',
+        t.description || '',
+        (t as any).trip_id ? (trips.find(tr => tr.id === (t as any).trip_id)?.name || '') : '',
+      ])
+    ]
+    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `transaksi_${new Date().toISOString().split('T')[0]}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast(`${filtered.length} transaksi diekspor!`, '📥')
+  }
+
+  // ── Quick Add helpers ─────────────────────────────────────
+  function openQuick() {
+    // Pre-fill dompet default: pertama dari personal wallets
+    const defaultWallet = wallets.find(w => w.pocket !== 'kantor' && w.is_active)
+    setQuickWallet(defaultWallet?.id || '')
+    setQuickCat('')
+    setQuickSub('')
+    setQuickAmount('')
+    setQuickDesc('')
+    setQuickType('expense')
+    setShowQuick(true)
+  }
+
+  const quickParentCats = useMemo(() =>
+    categories.filter(c => !(c as any).parent_id && c.type === quickType),
+    [categories, quickType]
+  )
+  const quickSubs = useMemo(() =>
+    categories.filter(c => (c as any).parent_id === quickCat),
+    [categories, quickCat]
+  )
+  const quickHasSubs = quickSubs.length > 0
+
+  async function submitQuick() {
+    if (!quickAmount || Number(quickAmount) <= 0) { toast('Isi jumlah dulu!', '⚠️'); return }
+    if (!quickWallet) { toast('Pilih dompet!', '⚠️'); return }
+    if (quickHasSubs && !quickSub) { toast('Pilih subkategori!', '⚠️'); return }
+    setQuickSaving(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) { setQuickSaving(false); return }
+    const { error } = await supabase.from('transactions').insert({
+      user_id: user.id,
+      wallet_id: quickWallet,
+      category_id: quickCat || null,
+      subcategory_id: (quickHasSubs ? quickSub : null) || (quickSub || null),
+      type: quickType,
+      amount: Number(quickAmount),
+      description: quickDesc || null,
+      date: new Date().toISOString().split('T')[0],
+      is_reimbursable: false,
+    })
+    setQuickSaving(false)
+    if (error) { toast(error.message, '❌'); return }
+    toast(quickType === 'income' ? 'Pemasukan dicatat! 💰' : 'Pengeluaran dicatat! 💸')
+    setShowQuick(false)
+    setQuickAmount('')
+    setQuickDesc('')
+    load()
+  }
+
   return (
     <AppShell>
       {/* Header */}
@@ -314,7 +397,10 @@ export default function TransactionsPage() {
           <h1 className="text-xl sm:text-2xl font-extrabold text-surface-900">Transaksi</h1>
           <p className="text-xs text-surface-400">{personalTxs.length} pribadi · {kantorTxs.length} kantor</p>
         </div>
-        <button onClick={openAdd} className="btn btn-primary py-2.5 px-4 text-sm">+ Tambah</button>
+        <div className="flex gap-2">
+          <button onClick={exportCSV} className="btn btn-secondary py-2.5 px-3 text-sm" title="Export CSV">📥</button>
+          <button onClick={openAdd} className="btn btn-primary py-2.5 px-4 text-sm">+ Tambah</button>
+        </div>
       </div>
 
       {/* Trip shortcut */}
@@ -811,6 +897,136 @@ export default function TransactionsPage() {
           </div>
         )}
       </Modal>
+
+      {/* ── Quick Add Floating Button ── */}
+      {!showQuick && !showAdd && (
+        <button
+          onClick={openQuick}
+          className="fixed bottom-24 right-4 z-40 w-14 h-14 rounded-full bg-brand-600 text-white shadow-lg shadow-brand-200 flex items-center justify-center text-2xl active:scale-95 transition-transform hover:bg-brand-700"
+          aria-label="Quick add transaksi"
+        >
+          +
+        </button>
+      )}
+
+      {/* ── Quick Add Bottom Sheet ── */}
+      {showQuick && (
+        <>
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm"
+            onClick={() => setShowQuick(false)}
+          />
+          {/* Sheet */}
+          <div className="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-2xl shadow-2xl p-5 pb-8 max-w-lg mx-auto animate-slide-up">
+            {/* Handle */}
+            <div className="w-10 h-1 bg-surface-200 rounded-full mx-auto mb-4" />
+
+            {/* Tipe toggle */}
+            <div className="flex gap-2 mb-4 bg-surface-100 p-1 rounded-xl">
+              <button
+                onClick={() => { setQuickType('expense'); setQuickCat(''); setQuickSub('') }}
+                className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${quickType === 'expense' ? 'bg-white text-red-600 shadow-sm' : 'text-surface-500'}`}
+              >
+                💸 Keluar
+              </button>
+              <button
+                onClick={() => { setQuickType('income'); setQuickCat(''); setQuickSub('') }}
+                className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${quickType === 'income' ? 'bg-white text-green-600 shadow-sm' : 'text-surface-500'}`}
+              >
+                💰 Masuk
+              </button>
+            </div>
+
+            {/* Amount — big input */}
+            <div className="mb-4">
+              <div className="flex items-center gap-2 bg-surface-50 rounded-xl px-4 py-3 border border-surface-200 focus-within:border-brand-400 transition-colors">
+                <span className="text-surface-400 text-sm font-medium">Rp</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  placeholder="0"
+                  autoFocus
+                  value={quickAmount}
+                  onChange={e => setQuickAmount(e.target.value)}
+                  className="flex-1 text-2xl font-extrabold bg-transparent outline-none text-surface-900 font-mono"
+                />
+              </div>
+            </div>
+
+            {/* Row: Dompet + Kategori */}
+            <div className="grid grid-cols-2 gap-2 mb-3">
+              <select
+                className="input text-sm"
+                value={quickWallet}
+                onChange={e => setQuickWallet(e.target.value)}
+              >
+                <option value="">Dompet</option>
+                {wallets.filter(w => w.pocket !== 'kantor').map(w => (
+                  <option key={w.id} value={w.id}>{w.icon || '💳'} {w.name}</option>
+                ))}
+              </select>
+              <select
+                className="input text-sm"
+                value={quickCat}
+                onChange={e => { setQuickCat(e.target.value); setQuickSub('') }}
+              >
+                <option value="">Kategori</option>
+                {quickParentCats.map(c => (
+                  <option key={c.id} value={c.id}>{c.icon} {c.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Subcategory chips — muncul kalau parent punya sub */}
+            {quickCat && quickHasSubs && (
+              <div className="flex flex-wrap gap-1.5 mb-3">
+                {quickSubs.map(sub => (
+                  <button
+                    key={sub.id}
+                    onClick={() => setQuickSub(quickSub === sub.id ? '' : sub.id)}
+                    className={`text-xs px-3 py-1.5 rounded-full border font-medium transition-all ${
+                      quickSub === sub.id
+                        ? 'text-white border-transparent'
+                        : 'bg-white text-surface-600 border-surface-200'
+                    }`}
+                    style={quickSub === sub.id ? {
+                      background: categories.find(c => c.id === quickCat)?.color || '#3b82f6'
+                    } : {}}
+                  >
+                    {sub.icon} {sub.name}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Keterangan (opsional) */}
+            <input
+              className="input text-sm mb-4"
+              placeholder="Keterangan (opsional)"
+              value={quickDesc}
+              onChange={e => setQuickDesc(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && submitQuick()}
+            />
+
+            {/* Submit */}
+            <button
+              onClick={submitQuick}
+              disabled={quickSaving}
+              className={`w-full py-3.5 rounded-xl font-bold text-base text-white transition-all active:scale-98 ${
+                quickType === 'expense' ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'
+              } ${quickSaving ? 'opacity-60' : ''}`}
+            >
+              {quickSaving ? 'Menyimpan...' : quickType === 'expense' ? '💸 Catat Pengeluaran' : '💰 Catat Pemasukan'}
+            </button>
+
+            <p className="text-center text-xs text-surface-400 mt-2">
+              atau <button onClick={() => { setShowQuick(false); openAdd() }} className="text-brand-600 font-semibold">buka form lengkap</button>
+            </p>
+          </div>
+        </>
+      )}
+
     </AppShell>
   )
 }
