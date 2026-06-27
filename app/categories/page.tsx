@@ -124,7 +124,7 @@ export default function CategoriesPage() {
       toast('Kategori ditambahkan!', '🏷️')
       // Auto-expand parent
       if (form.parent_id) {
-        setExpandedParents(prev => new Set([...prev, form.parent_id]))
+        setExpandedParents(prev => new Set(Array.from(prev).concat(form.parent_id)))
       }
     }
     setShowModal(false)
