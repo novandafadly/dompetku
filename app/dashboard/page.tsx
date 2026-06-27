@@ -68,7 +68,7 @@ export default function DashboardPage() {
   async function saveSnapshot(w: Wallet[], a: Asset[], d: Debt[]) {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
-    const totalBalance = w.reduce((s, x) => s + Number(x.balance), 0)
+    const totalBalance = w.filter(x => x.pocket !== 'kantor').reduce((s, x) => s + Number(x.balance), 0)
     const totalAssets = a.reduce((s, x) => s + Number(x.value), 0)
     const totalDebt = d.filter(x => x.type === 'debt').reduce((s, x) => s + Number(x.total_amount) - Number(x.paid_amount), 0)
     const today = new Date().toISOString().split('T')[0]
@@ -87,25 +87,26 @@ export default function DashboardPage() {
   })), [wallets])
 
   const operasionalTotal = pocketTotals.find(p => p.pocket === 'operasional')?.total || 0
-  const totalBalance = useMemo(() => wallets.reduce((s, w) => s + Number(w.balance), 0), [wallets])
+  const totalBalance = useMemo(() => wallets.filter(w => w.pocket !== 'kantor').reduce((s, w) => s + Number(w.balance), 0), [wallets])
   const totalAssets = useMemo(() => assets.reduce((s, a) => s + Number(a.value), 0), [assets])
   const totalDebt = useMemo(() => debts.filter(d => d.type === 'debt').reduce((s, d) => s + Number(d.total_amount) - Number(d.paid_amount), 0), [debts])
   const netWorth = totalBalance + totalAssets - totalDebt
 
-  const monthlyIncome = useMemo(() => transactions.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0), [transactions])
-  const monthlyExpense = useMemo(() => transactions.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0), [transactions])
+  const personalTx = useMemo(() => transactions.filter(t => (t as any).wallets?.pocket !== 'kantor'), [transactions])
+  const monthlyIncome = useMemo(() => personalTx.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0), [personalTx])
+  const monthlyExpense = useMemo(() => personalTx.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0), [personalTx])
   const recurringMonthly = useMemo(() => normalizeRecurringToMonthly(recurring), [recurring])
   const freeCashflow = monthlyIncome - monthlyExpense - recurringMonthly
 
   const expenseByCategory = useMemo(() => {
     const map: Record<string, { name: string; value: number; icon: string }> = {}
-    transactions.filter(t => t.type === 'expense').forEach(t => {
+    personalTx.filter(t => t.type === 'expense').forEach(t => {
       const key = t.categories?.name || 'Lainnya'
       if (!map[key]) map[key] = { name: key, value: 0, icon: t.categories?.icon || '📦' }
       map[key].value += Number(t.amount)
     })
     return Object.values(map).sort((a, b) => b.value - a.value)
-  }, [transactions])
+  }, [personalTx])
 
   const upcomingRecurring = recurring.filter(r => daysUntil(r.next_due) <= 7)
 
@@ -124,7 +125,7 @@ export default function DashboardPage() {
   const nwChange = netWorth - firstNW
   const nwChangePct = firstNW !== 0 ? (nwChange / Math.abs(firstNW)) * 100 : 0
 
-  const recentTx = transactions.slice(0, 8)
+  const recentTx = personalTx.slice(0, 8)
 
   return (
     <AppShell>
