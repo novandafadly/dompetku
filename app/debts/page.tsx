@@ -65,11 +65,9 @@ type ContactSummary = {
   net: number
 }
 
-// ─── Helper: reverse semua transaksi debt yang ada ────────
-// Dipakai sebelum edit/hapus, supaya saldo wallet lama dikembalikan dulu.
-// PENTING: saldo wallet TIDAK diupdate manual di sini. Cukup hapus baris
-// transaksinya — trigger DB `on_transaction_change` sudah otomatis
-// mengembalikan saldo persis sekali. Update manual + trigger = dobel.
+// ─── Helper: reverse semua transaksi debt ─────────────────
+// DELETE transaksi saja — trigger update_wallet_balance_on_transaction
+// (SECURITY DEFINER) auto-reverse balance via DELETE handler
 async function reverseDebtTransactions(debtId: string) {
   await supabase.from('transactions').delete().eq('debt_id', debtId)
 }
@@ -124,7 +122,8 @@ export default function DebtsPage() {
   }
 
   async function saveContact() {
-    const { data: { session } } = await supabase.auth.getSession()
+    const { data: { user } } = await supabase.auth.getUser()
+    const session = user ? { user } : null
     if (!session) return
     if (!contactForm.name.trim()) { toast('Nama wajib diisi!', '⚠️'); return }
 
@@ -178,7 +177,8 @@ export default function DebtsPage() {
   }
 
   async function saveDebt() {
-    const { data: { session } } = await supabase.auth.getSession()
+    const { data: { user } } = await supabase.auth.getUser()
+    const session = user ? { user } : null
     if (!session) return
     const total = Number(debtForm.total_amount)
     if (!total) { toast('Jumlah wajib diisi!', '⚠️'); return }
@@ -211,18 +211,14 @@ export default function DebtsPage() {
 
     if (editingDebt) {
       // ── EDIT MODE ──
-      // 1. Reverse semua transaksi lama terkait debt ini (hapus transaksi lama;
-      //    trigger DB otomatis mengembalikan saldo wallet lama, sekali saja)
+      // 1. Reverse semua transaksi lama terkait debt ini — trigger auto-reverse balance
       await reverseDebtTransactions(editingDebt.id)
 
       // 2. Update data debt
       const { error } = await supabase.from('debts').update(payload).eq('id', editingDebt.id)
       if (error) { toast(error.message, '❌'); return }
 
-      // 3. Buat transaksi baru dengan wallet baru (jika ada wallet dipilih).
-      //    Insert ini saja sudah cukup — trigger DB `on_transaction_change`
-      //    yang akan memotong/menambah saldo wallet, jadi TIDAK perlu update
-      //    saldo manual di sini (kalau dobel, saldo akan salah).
+      // 3. Insert transaksi baru — trigger otomatis update balance
       if (debtForm.wallet_id) {
         await supabase.from('transactions').insert({
           user_id: session.user.id,
@@ -248,10 +244,8 @@ export default function DebtsPage() {
         .single()
       if (error) { toast(error.message, '❌'); return }
 
-      // Catat transaksi (jika ada wallet dipilih). Trigger DB
-      // `on_transaction_change` yang akan memotong/menambah saldo wallet
-      // secara otomatis — JANGAN update saldo manual di sini juga,
-      // nanti kepotong dobel.
+      // Adjust wallet balance dan catat transaksi
+      // Insert transaksi — trigger otomatis update balance
       if (debtForm.wallet_id && newDebt) {
         await supabase.from('transactions').insert({
           user_id: session.user.id,
@@ -276,7 +270,7 @@ export default function DebtsPage() {
     e?.stopPropagation()
     if (!confirm('Hapus catatan ini?')) return
 
-    // Reverse semua transaksi terkait sebelum hapus debt
+    // Reverse semua transaksi terkait — trigger auto-reverse balance
     await reverseDebtTransactions(id)
 
     await supabase.from('debts').delete().eq('id', id)
@@ -301,7 +295,8 @@ export default function DebtsPage() {
 
   async function submitPay() {
     if (!payingDebt) return
-    const { data: { session } } = await supabase.auth.getSession()
+    const { data: { user } } = await supabase.auth.getUser()
+    const session = user ? { user } : null
     if (!session) return
 
     const amount = Number(payAmount)
@@ -311,9 +306,7 @@ export default function DebtsPage() {
     const isCompleted = newPaid >= Number(payingDebt.total_amount)
     await supabase.from('debts').update({ paid_amount: newPaid, is_completed: isCompleted }).eq('id', payingDebt.id)
 
-    // Catat transaksi pembayaran (jika ada wallet dipilih). Trigger DB
-    // `on_transaction_change` yang akan memotong/menambah saldo wallet —
-    // JANGAN update saldo manual juga, nanti dobel.
+    // Insert transaksi bayar — trigger otomatis update balance
     if (payWalletId) {
       await supabase.from('transactions').insert({
         user_id: session.user.id,
