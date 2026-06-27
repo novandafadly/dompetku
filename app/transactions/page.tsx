@@ -19,7 +19,6 @@ type Trip = {
 type FormState = {
   wallet_id: string
   category_id: string
-  subcategory_id: string
   type: 'income' | 'expense'
   amount: string
   description: string
@@ -29,7 +28,7 @@ type FormState = {
 }
 
 const emptyForm: FormState = {
-  wallet_id: '', category_id: '', subcategory_id: '', type: 'expense', amount: '',
+  wallet_id: '', category_id: '', type: 'expense', amount: '',
   description: '', date: new Date().toISOString().split('T')[0],
   is_reimbursable: false,
   trip_id: '',
@@ -60,11 +59,10 @@ export default function TransactionsPage() {
   useEffect(() => { load() }, [])
 
   async function load() {
-    const { data: { session } } = await supabase.auth.getSession()
+    const { data: { user: sessionUser } } = await supabase.auth.getUser()
+    const session = sessionUser ? { user: sessionUser } : null
     const [t, w, c, tr] = await Promise.all([
-      supabase.from('transactions')
-        .select('*, categories(*), wallets(*), subcategories:subcategory_id(id,name,icon,color)')
-        .order('date', { ascending: false }).order('created_at', { ascending: false }).limit(300),
+      supabase.from('transactions').select('*, categories(*), wallets(*)').order('date', { ascending: false }).order('created_at', { ascending: false }).limit(300),
       supabase.from('wallets').select('*').eq('is_active', true),
       supabase.from('categories').select('*').order('name'),
       session
@@ -78,6 +76,10 @@ export default function TransactionsPage() {
   }
 
   // ── Helpers ───────────────────────────────────────────────
+  function isKantorTx(tx: Transaction) {
+    return (tx as any).wallets?.pocket === 'kantor'
+  }
+
   function isInvestmentCategory(catId: string): boolean {
     const cat = categories.find(c => c.id === catId)
     if (!cat) return false
@@ -98,22 +100,7 @@ export default function TransactionsPage() {
     }
   }
 
-  // ── Subcategory helpers ───────────────────────────────────
-  // Parents = categories with no parent_id
-  const parentCategories = useMemo(() =>
-    categories.filter(c => !(c as any).parent_id),
-    [categories]
-  )
-
-  // Subs of selected parent
-  const subcategories = useMemo(() =>
-    categories.filter(c => (c as any).parent_id === form.category_id),
-    [categories, form.category_id]
-  )
-
-  const hasSubs = subcategories.length > 0
-
-  // Tab switch helper
+  // ── Tab switch helper ─────────────────────────────────────
   function switchTab(tab: ViewTab) {
     setActiveTab(tab)
     setFilterWallet('')
@@ -140,7 +127,6 @@ export default function TransactionsPage() {
     setForm({
       wallet_id: tx.wallet_id,
       category_id: tx.category_id || '',
-      subcategory_id: (tx as any).subcategory_id || '',
       type: tx.type,
       amount: String(tx.amount),
       description: tx.description || '',
@@ -152,16 +138,11 @@ export default function TransactionsPage() {
   }
 
   async function saveTransaction() {
-    const { data: { session } } = await supabase.auth.getSession()
+    const { data: { user } } = await supabase.auth.getUser()
+    const session = user ? { user } : null
     if (!session) return
     const amount = Number(form.amount)
-    if (!amount || !form.wallet_id) { toast('Lengkapi data!', '⚠️'); return }
-
-    // Validasi subcategory wajib jika ada sub
-    if (hasSubs && !form.subcategory_id) {
-      toast('Pilih subkategori terlebih dahulu!', '⚠️'); return
-    }
-
+    if (!amount || amount <= 0 || !form.wallet_id) { toast('Lengkapi data!', '⚠️'); return }
     const isInvest = form.type === 'expense' && form.category_id && isInvestmentCategory(form.category_id)
     const selectedWallet = wallets.find(w => w.id === form.wallet_id)
     const isKantor = selectedWallet?.pocket === 'kantor'
@@ -175,7 +156,6 @@ export default function TransactionsPage() {
         user_id: session.user.id,
         wallet_id: form.wallet_id,
         category_id: form.category_id || null,
-        subcategory_id: form.subcategory_id || null,
         type: form.type,
         amount,
         description: form.description || null,
@@ -192,7 +172,6 @@ export default function TransactionsPage() {
         user_id: session.user.id,
         wallet_id: form.wallet_id,
         category_id: form.category_id || null,
-        subcategory_id: form.subcategory_id || null,
         type: form.type,
         amount,
         description: form.description || null,
@@ -214,7 +193,10 @@ export default function TransactionsPage() {
   }
 
   function openReimburseModal(tx: Transaction) {
-    if (!!(tx as any).reimbursed_at) { undoReimburse(tx); return }
+    if (!!(tx as any).reimbursed_at) {
+      undoReimburse(tx)
+      return
+    }
     setReimburseTarget(tx)
     setReimburseForm({ wallet_id: '', date: new Date().toISOString().split('T')[0] })
   }
@@ -227,14 +209,20 @@ export default function TransactionsPage() {
 
   async function confirmReimburse() {
     if (!reimburseTarget) return
-    const { data: { session } } = await supabase.auth.getSession()
+    const { data: { user } } = await supabase.auth.getUser()
+    const session = user ? { user } : null
     if (!session) return
     if (!reimburseForm.wallet_id) { toast('Pilih wallet tujuan dulu!', '⚠️'); return }
+
     const tx = reimburseTarget
     const amount = Number(tx.amount)
     const desc = tx.description || (tx as any).categories?.name || 'Transaksi'
-    const { error: updateErr } = await supabase.from('transactions').update({ reimbursed_at: new Date().toISOString() }).eq('id', tx.id)
+
+    const { error: updateErr } = await supabase.from('transactions').update({
+      reimbursed_at: new Date().toISOString(),
+    }).eq('id', tx.id)
     if (updateErr) { toast(updateErr.message, '❌'); return }
+
     const { error: insertErr } = await supabase.from('transactions').insert({
       user_id: session.user.id,
       wallet_id: reimburseForm.wallet_id,
@@ -246,6 +234,7 @@ export default function TransactionsPage() {
       is_reimbursable: false,
     })
     if (insertErr) { toast(insertErr.message, '❌'); return }
+
     toast('✅ Reimburse dicatat & masuk ke wallet!', '💰')
     setReimburseTarget(null)
     load()
@@ -259,10 +248,12 @@ export default function TransactionsPage() {
   ), [transactions])
 
   const pendingReimburse = reimburseTxs.filter(t => !(t as any).reimbursed_at)
+  const doneReimburse = reimburseTxs.filter(t => !!(t as any).reimbursed_at)
   const totalPendingReimburse = pendingReimburse.reduce((s, t) => s + Number(t.amount), 0)
 
   const baseTxs = activeTab === 'kantor' ? kantorTxs : activeTab === 'reimburse' ? reimburseTxs : personalTxs
 
+  // Wallet options sesuai tab aktif
   const walletOptions = useMemo(() => {
     if (activeTab === 'kantor') return wallets.filter(w => w.pocket === 'kantor')
     if (activeTab === 'personal') return wallets.filter(w => w.pocket !== 'kantor')
@@ -282,18 +273,12 @@ export default function TransactionsPage() {
       const q = search.toLowerCase()
       return t.description?.toLowerCase().includes(q) ||
         (t as any).categories?.name?.toLowerCase().includes(q) ||
-        (t as any).wallets?.name?.toLowerCase().includes(q) ||
-        (t as any).subcategories?.name?.toLowerCase().includes(q)
+        (t as any).wallets?.name?.toLowerCase().includes(q)
     }
     return true
   }), [baseTxs, search, filterType, filterCat, filterWallet, filterDateFrom, filterDateTo])
 
-  // For filter dropdown: only show parent categories
-  const filterParentCats = useMemo(() =>
-    categories.filter(c => !(c as any).parent_id && c.type !== 'income'),
-    [categories]
-  )
-
+  const filteredCats = categories.filter(c => !form.type || c.type === form.type)
   const totalIncome = useMemo(() => filtered.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0), [filtered])
   const totalExpense = useMemo(() => filtered.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0), [filtered])
 
@@ -305,12 +290,6 @@ export default function TransactionsPage() {
   const kantorWallets = wallets.filter(w => w.pocket === 'kantor')
   const selectedWalletPocket = wallets.find(w => w.id === form.wallet_id)?.pocket
 
-  // Filter cats for form — only parents (picker handles subs)
-  const filteredParentCats = useMemo(() =>
-    parentCategories.filter(c => !form.type || c.type === form.type),
-    [parentCategories, form.type]
-  )
-
   function getTripBadge(tx: Transaction) {
     const tripId = (tx as any).trip_id
     if (!tripId) return null
@@ -319,8 +298,12 @@ export default function TransactionsPage() {
   }
 
   function resetFilters() {
-    setFilterType(''); setFilterCat(''); setFilterWallet('')
-    setFilterDateFrom(''); setFilterDateTo(''); setSearch('')
+    setFilterType('')
+    setFilterCat('')
+    setFilterWallet('')
+    setFilterDateFrom('')
+    setFilterDateTo('')
+    setSearch('')
   }
 
   return (
@@ -349,7 +332,10 @@ export default function TransactionsPage() {
 
       {/* Reimburse alert */}
       {pendingReimburse.length > 0 && (
-        <div className="card p-3 mb-4 bg-amber-50 border border-amber-200 flex items-center gap-3 cursor-pointer" onClick={() => switchTab('reimburse')}>
+        <div
+          className="card p-3 mb-4 bg-amber-50 border border-amber-200 flex items-center gap-3 cursor-pointer"
+          onClick={() => switchTab('reimburse')}
+        >
           <span className="text-xl">🏢</span>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-bold text-amber-800">{pendingReimburse.length} transaksi belum direimburse</p>
@@ -361,127 +347,314 @@ export default function TransactionsPage() {
 
       {/* Tabs */}
       <div className="flex gap-1.5 mb-4 bg-surface-100 p-1 rounded-xl">
-        {(['personal', 'kantor', 'reimburse'] as ViewTab[]).map(t => (
-          <button key={t} onClick={() => switchTab(t)}
-            className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all relative ${activeTab === t ? 'bg-white text-surface-900 shadow-sm' : 'text-surface-500'}`}>
-            {t === 'personal' ? '👤 Pribadi' : t === 'kantor' ? '🏢 Kas Kantor' : '💼 Reimburse'}
-            {t === 'reimburse' && pendingReimburse.length > 0 && (
-              <span className="absolute -top-1 -right-1 w-4 h-4 bg-amber-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center">{pendingReimburse.length}</span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      {/* Summary cards */}
-      {activeTab === 'personal' && (
-        <div className="grid grid-cols-2 gap-2 mb-4">
-          <div className="card p-3"><p className="text-[10px] font-bold text-green-600 uppercase mb-1">Pemasukan</p><p className="text-base font-extrabold text-green-600 font-mono">{formatCurrency(personalIncome)}</p></div>
-          <div className="card p-3"><p className="text-[10px] font-bold text-red-500 uppercase mb-1">Pengeluaran</p><p className="text-base font-extrabold text-red-500 font-mono">{formatCurrency(personalExpense)}</p></div>
-        </div>
-      )}
-      {activeTab === 'kantor' && (
-        <div className="grid grid-cols-2 gap-2 mb-4">
-          <div className="card p-3"><p className="text-[10px] font-bold text-green-600 uppercase mb-1">Pemasukan Kantor</p><p className="text-base font-extrabold text-green-600 font-mono">{formatCurrency(kantorIncome)}</p></div>
-          <div className="card p-3"><p className="text-[10px] font-bold text-purple-600 uppercase mb-1">Pengeluaran Kantor</p><p className="text-base font-extrabold text-purple-600 font-mono">{formatCurrency(kantorExpense)}</p></div>
-        </div>
-      )}
-
-      {/* Search & Filter */}
-      <div className="flex gap-2 mb-3">
-        <input
-          className="input flex-1 text-sm"
-          placeholder="Cari transaksi..."
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
         <button
-          onClick={() => setShowFilters(!showFilters)}
-          className={`btn text-sm relative ${showFilters ? 'btn-primary' : 'btn-secondary'}`}
+          onClick={() => switchTab('personal')}
+          className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all ${activeTab === 'personal' ? 'bg-white text-surface-900 shadow-sm' : 'text-surface-500'}`}
         >
-          🔽{activeFilterCount > 0 && <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[9px] rounded-full flex items-center justify-center">{activeFilterCount}</span>}
+          👤 Pribadi
+        </button>
+        <button
+          onClick={() => switchTab('kantor')}
+          className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all ${activeTab === 'kantor' ? 'bg-white text-surface-900 shadow-sm' : 'text-surface-500'}`}
+        >
+          🏢 Kas Kantor
+        </button>
+        <button
+          onClick={() => switchTab('reimburse')}
+          className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all relative ${activeTab === 'reimburse' ? 'bg-white text-surface-900 shadow-sm' : 'text-surface-500'}`}
+        >
+          💼 Reimburse
+          {pendingReimburse.length > 0 && (
+            <span className="absolute -top-1 -right-1 w-4 h-4 bg-amber-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center">
+              {pendingReimburse.length}
+            </span>
+          )}
         </button>
       </div>
 
-      {showFilters && (
-        <div className="card p-4 mb-3 space-y-3">
-          <div className="grid grid-cols-2 gap-2">
-            <select className="input text-sm" value={filterType} onChange={e => setFilterType(e.target.value)}>
-              <option value="">Semua tipe</option>
-              <option value="expense">Pengeluaran</option>
-              <option value="income">Pemasukan</option>
-            </select>
-            <select className="input text-sm" value={filterCat} onChange={e => setFilterCat(e.target.value)}>
-              <option value="">Semua kategori</option>
-              {filterParentCats.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
-            </select>
-            <select className="input text-sm" value={filterWallet} onChange={e => setFilterWallet(e.target.value)}>
-              <option value="">Semua dompet</option>
-              {walletOptions.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-            </select>
+      {/* Tab summaries */}
+      {activeTab === 'personal' && (
+        <div className="grid grid-cols-2 gap-2 mb-4">
+          <div className="card p-3">
+            <p className="text-[10px] font-bold text-green-600 uppercase mb-1">Pemasukan Pribadi</p>
+            <p className="text-base font-extrabold text-green-600 font-mono">{formatCurrency(personalIncome)}</p>
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <input className="input text-sm" type="date" value={filterDateFrom} onChange={e => setFilterDateFrom(e.target.value)} placeholder="Dari" />
-            <input className="input text-sm" type="date" value={filterDateTo} onChange={e => setFilterDateTo(e.target.value)} placeholder="Sampai" />
+          <div className="card p-3">
+            <p className="text-[10px] font-bold text-red-500 uppercase mb-1">Pengeluaran Pribadi</p>
+            <p className="text-base font-extrabold text-red-500 font-mono">{formatCurrency(personalExpense)}</p>
           </div>
-          {hasFilters && <button onClick={resetFilters} className="text-xs text-red-500 font-bold">✕ Reset filter</button>}
         </div>
       )}
 
-      {/* Transaction list */}
-      <div className="space-y-2">
-        {filtered.length > 0 ? filtered.map(tx => {
-          const sub = (tx as any).subcategories
-          const tripBadge = getTripBadge(tx)
-          const isReimb = (tx as any).is_reimbursable
-          const isDone = !!(tx as any).reimbursed_at
-          return (
-            <div key={tx.id} className="card p-4 flex items-center gap-3 group active:bg-surface-50 transition-colors cursor-pointer" onClick={() => openEdit(tx)}>
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
-                style={{ background: ((tx as any).categories?.color || '#64748b') + '22' }}>
-                {(tx as any).categories?.icon || (tx.type === 'income' ? '💰' : '💸')}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-surface-800 truncate">
-                  {tx.description || (tx as any).categories?.name || (tx.type === 'income' ? 'Pemasukan' : 'Pengeluaran')}
-                </p>
-                <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
-                  {/* Category + subcategory */}
-                  {(tx as any).categories?.name && (
-                    <span className="text-[10px] text-surface-400">
-                      {(tx as any).categories.name}
-                      {sub?.name && <span className="text-surface-300"> › {sub.icon} {sub.name}</span>}
-                    </span>
-                  )}
-                  {tripBadge && <span className="text-[9px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded-full font-medium">{tripBadge}</span>}
-                  {isReimb && <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${isDone ? 'bg-green-50 text-green-600' : 'bg-amber-50 text-amber-600'}`}>{isDone ? '✅ Reimburse' : '⏳ Belum reimburse'}</span>}
-                </div>
-                <p className="text-[10px] text-surface-400 mt-0.5">{formatDate(tx.date)} · {(tx as any).wallets?.name}</p>
-              </div>
-              <div className="text-right flex-shrink-0">
-                <p className={`text-sm font-extrabold font-mono ${tx.type === 'income' ? 'text-green-600' : 'text-red-500'}`}>
-                  {tx.type === 'income' ? '+' : '-'}{formatCurrency(Number(tx.amount))}
-                </p>
-                {isReimb && activeTab !== 'reimburse' && (
-                  <button
-                    onClick={e => { e.stopPropagation(); openReimburseModal(tx) }}
-                    className="text-[9px] font-bold text-amber-600 hover:text-amber-700 mt-0.5 block"
-                  >
-                    {isDone ? 'Undo' : 'Reimburse'}
-                  </button>
-                )}
-              </div>
+      {activeTab === 'kantor' && (
+        <>
+          {/* Kas Kantor summary cards */}
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <div className="card p-3">
+              <p className="text-[10px] font-bold text-green-600 uppercase mb-1">Pemasukan Kantor</p>
+              <p className="text-base font-extrabold text-green-600 font-mono">{formatCurrency(kantorIncome)}</p>
             </div>
-          )
-        }) : (
-          <div className="card text-center py-16 text-surface-300">
-            <p className="text-4xl mb-2">📭</p>
+            <div className="card p-3">
+              <p className="text-[10px] font-bold text-purple-600 uppercase mb-1">Pengeluaran Kantor</p>
+              <p className="text-base font-extrabold text-purple-600 font-mono">{formatCurrency(kantorExpense)}</p>
+            </div>
+          </div>
+          {/* Per-wallet breakdown */}
+          {kantorWallets.length > 0 && (
+            <div className="flex gap-2 mb-4 overflow-x-auto pb-1">
+              {kantorWallets.map(w => (
+                <div
+                  key={w.id}
+                  className={`card p-3 flex-shrink-0 min-w-[140px] cursor-pointer transition-all ${filterWallet === w.id ? 'ring-2 ring-purple-400' : ''}`}
+                  onClick={() => setFilterWallet(filterWallet === w.id ? '' : w.id)}
+                >
+                  <p className="text-[10px] font-bold text-purple-600 uppercase mb-1">{w.name}</p>
+                  <p className="text-base font-extrabold font-mono text-surface-900">{formatCurrency(Number(w.balance))}</p>
+                  <p className="text-[10px] text-surface-400">{kantorTxs.filter(t => t.wallet_id === w.id).length} transaksi</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {activeTab === 'reimburse' && (
+        <div className="grid grid-cols-2 gap-2 mb-4">
+          <div className="card p-3 bg-amber-50 border border-amber-200">
+            <p className="text-[10px] font-bold text-amber-700 uppercase mb-1">Belum Direimburse</p>
+            <p className="text-base font-extrabold text-amber-700 font-mono">{formatCurrency(totalPendingReimburse)}</p>
+            <p className="text-[10px] text-amber-600">{pendingReimburse.length} transaksi</p>
+          </div>
+          <div className="card p-3 bg-green-50 border border-green-200">
+            <p className="text-[10px] font-bold text-green-700 uppercase mb-1">Sudah Direimburse</p>
+            <p className="text-base font-extrabold text-green-700 font-mono">
+              {formatCurrency(doneReimburse.reduce((s, t) => s + Number(t.amount), 0))}
+            </p>
+            <p className="text-[10px] text-green-600">{doneReimburse.length} transaksi</p>
+          </div>
+        </div>
+      )}
+
+      {/* Search + filter toggle */}
+      <div className="flex gap-2 mb-3">
+        <input
+          className="input flex-1 text-sm"
+          placeholder="🔍 Cari transaksi..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <button
+          onClick={() => setShowFilters(!showFilters)}
+          className={`btn min-w-0 px-3 relative ${activeFilterCount > 0 ? 'btn-primary' : 'btn-secondary'}`}
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h18M6 8h12M9 12h6" />
+          </svg>
+          {activeFilterCount > 0 && (
+            <span className="absolute -top-1 -right-1 w-4 h-4 bg-white text-blue-600 text-[9px] font-extrabold rounded-full flex items-center justify-center shadow">
+              {activeFilterCount}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* Filter panel — 3 filter rows */}
+      {showFilters && (
+        <div className="card p-3 mb-3 space-y-2">
+          {/* Row 1: Tipe & Kategori */}
+          <div className="flex gap-2">
+            <select
+              className="input flex-1 text-sm"
+              value={filterType}
+              onChange={(e) => setFilterType(e.target.value)}
+            >
+              <option value="">Semua Tipe</option>
+              <option value="income">💰 Pemasukan</option>
+              <option value="expense">💸 Pengeluaran</option>
+            </select>
+            <select
+              className="input flex-1 text-sm"
+              value={filterCat}
+              onChange={(e) => setFilterCat(e.target.value)}
+            >
+              <option value="">Semua Kategori</option>
+              {categories.map(c => (
+                <option key={c.id} value={c.id}>{c.icon} {c.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Row 2: Wallet */}
+          <select
+            className="input w-full text-sm"
+            value={filterWallet}
+            onChange={(e) => setFilterWallet(e.target.value)}
+          >
+            <option value="">Semua Dompet / Bank</option>
+            {walletOptions.map(w => (
+              <option key={w.id} value={w.id}>
+                {w.pocket === 'kantor' ? '🏢' : w.pocket === 'tabungan' ? '💰' : '👤'} {w.name}
+              </option>
+            ))}
+          </select>
+
+          {/* Row 3: Tanggal */}
+          <div className="flex gap-2 items-center">
+            <div className="flex-1">
+              <label className="text-[10px] font-bold text-surface-400 uppercase mb-1 block">Dari</label>
+              <input
+                className="input w-full text-sm"
+                type="date"
+                value={filterDateFrom}
+                onChange={(e) => setFilterDateFrom(e.target.value)}
+              />
+            </div>
+            <div className="text-surface-300 text-sm mt-4">—</div>
+            <div className="flex-1">
+              <label className="text-[10px] font-bold text-surface-400 uppercase mb-1 block">Sampai</label>
+              <input
+                className="input w-full text-sm"
+                type="date"
+                value={filterDateTo}
+                onChange={(e) => setFilterDateTo(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Shortcut tanggal */}
+          <div className="flex gap-1.5 flex-wrap">
+            {[
+              { label: 'Bulan ini', action: () => {
+                const now = new Date()
+                setFilterDateFrom(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`)
+                setFilterDateTo(new Date().toISOString().split('T')[0])
+              }},
+              { label: 'Bulan lalu', action: () => {
+                const now = new Date()
+                const first = new Date(now.getFullYear(), now.getMonth()-1, 1)
+                const last = new Date(now.getFullYear(), now.getMonth(), 0)
+                setFilterDateFrom(first.toISOString().split('T')[0])
+                setFilterDateTo(last.toISOString().split('T')[0])
+              }},
+              { label: '7 hari', action: () => {
+                const to = new Date()
+                const from = new Date(); from.setDate(from.getDate()-7)
+                setFilterDateFrom(from.toISOString().split('T')[0])
+                setFilterDateTo(to.toISOString().split('T')[0])
+              }},
+              { label: '30 hari', action: () => {
+                const to = new Date()
+                const from = new Date(); from.setDate(from.getDate()-30)
+                setFilterDateFrom(from.toISOString().split('T')[0])
+                setFilterDateTo(to.toISOString().split('T')[0])
+              }},
+            ].map(s => (
+              <button
+                key={s.label}
+                onClick={s.action}
+                className="text-[10px] font-bold px-2 py-1 rounded-lg bg-surface-100 text-surface-500 hover:bg-surface-200 transition-colors"
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+
+          {hasFilters && (
+            <button onClick={resetFilters} className="btn btn-secondary text-xs w-full">
+              Reset Semua Filter
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Active filter summary + totals */}
+      {hasFilters && (
+        <div className="grid grid-cols-2 gap-2 mb-3">
+          <div className="card p-3 flex items-center justify-between">
+            <span className="text-xs text-green-600 font-bold">Masuk</span>
+            <span className="font-mono font-bold text-sm text-green-600">
+              {new Intl.NumberFormat('id-ID', { notation: 'compact', style: 'currency', currency: 'IDR', maximumFractionDigits: 1 }).format(totalIncome)}
+            </span>
+          </div>
+          <div className="card p-3 flex items-center justify-between">
+            <span className="text-xs text-red-500 font-bold">Keluar</span>
+            <span className="font-mono font-bold text-sm text-red-500">
+              {new Intl.NumberFormat('id-ID', { notation: 'compact', style: 'currency', currency: 'IDR', maximumFractionDigits: 1 }).format(totalExpense)}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Result count */}
+      {hasFilters && (
+        <p className="text-[10px] text-surface-400 mb-2 px-1">
+          Menampilkan {filtered.length} dari {baseTxs.length} transaksi
+        </p>
+      )}
+
+      {/* Transactions List */}
+      <div className="card overflow-hidden">
+        {filtered.length > 0 ? (
+          <div className="divide-y divide-surface-100">
+            {filtered.map((tx) => {
+              const isKantor = (tx as any).wallets?.pocket === 'kantor'
+              const isPendingReimburse = (tx as any).is_reimbursable && !(tx as any).reimbursed_at
+              const isDoneReimburse = (tx as any).is_reimbursable && !!(tx as any).reimbursed_at
+              const tripBadge = getTripBadge(tx)
+              return (
+                <div key={tx.id} className="flex items-center gap-3 px-4 py-3.5 active:bg-surface-50 transition-colors">
+                  <div
+                    className="w-10 h-10 rounded-xl flex items-center justify-center text-lg flex-shrink-0 cursor-pointer"
+                    style={{ background: isKantor ? '#f3e8ff' : tx.type === 'income' ? '#dcfce7' : '#fee2e2' }}
+                    onClick={() => openEdit(tx)}
+                  >
+                    {isKantor ? '🏢' : (tx as any).categories?.icon || (tx.type === 'income' ? '💰' : '💸')}
+                  </div>
+                  <div className="flex-1 min-w-0 cursor-pointer" onClick={() => openEdit(tx)}>
+                    <p className="text-sm font-semibold text-surface-800 truncate">
+                      {tx.description || (tx as any).categories?.name || 'Transaksi'}
+                    </p>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <p className="text-[10px] text-surface-400">{formatDate(tx.date)} · {(tx as any).wallets?.name}</p>
+                      {(tx as any).debt_id && <span className="bg-surface-100 text-surface-500 px-1.5 rounded text-[9px]">🤝 Utang/Piutang</span>}
+                      {isPendingReimburse && <span className="bg-amber-100 text-amber-700 px-1.5 rounded text-[9px] font-bold">⏳ Belum reimburse</span>}
+                      {isDoneReimburse && <span className="bg-green-100 text-green-700 px-1.5 rounded text-[9px] font-bold">✅ Sudah reimburse</span>}
+                      {tripBadge && <span className="bg-blue-50 text-blue-700 px-1.5 rounded text-[9px] font-bold">{tripBadge}</span>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <p
+                      className={`text-sm font-bold font-mono ${tx.type === 'income' ? 'text-green-600' : isKantor ? 'text-purple-600' : 'text-red-500'}`}
+                      onClick={() => openEdit(tx)}
+                    >
+                      {tx.type === 'income' ? '+' : '-'}{new Intl.NumberFormat('id-ID', { notation: 'compact', style: 'currency', currency: 'IDR', maximumFractionDigits: 1 }).format(Number(tx.amount))}
+                    </p>
+                    {(tx as any).is_reimbursable && (
+                      <button
+                        onClick={() => openReimburseModal(tx)}
+                        className={`w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-all ${(tx as any).reimbursed_at ? 'bg-green-100 text-green-600' : 'bg-amber-100 text-amber-600 hover:bg-amber-200'}`}
+                        title={(tx as any).reimbursed_at ? 'Sudah direimburse — klik untuk batal' : 'Tandai sudah direimburse'}
+                      >
+                        {(tx as any).reimbursed_at ? '✓' : '○'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="text-center py-16 text-surface-300">
+            <p className="text-4xl mb-2">{activeTab === 'kantor' ? '🏢' : activeTab === 'reimburse' ? '💼' : '📝'}</p>
             <p className="text-sm">
               {hasFilters ? 'Tidak ada transaksi yang cocok dengan filter' :
                activeTab === 'kantor' ? 'Belum ada transaksi kas kantor' :
                activeTab === 'reimburse' ? 'Tidak ada transaksi reimburse' :
                'Belum ada transaksi pribadi'}
             </p>
-            {hasFilters && <button onClick={resetFilters} className="mt-3 text-xs text-blue-500 font-bold">Reset filter</button>}
+            {hasFilters && (
+              <button onClick={resetFilters} className="mt-3 text-xs text-blue-500 font-bold">Reset filter</button>
+            )}
           </div>
         )}
       </div>
@@ -491,34 +664,30 @@ export default function TransactionsPage() {
         <div className="space-y-4">
           {editing && (editing as any).debt_id && (
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex gap-2">
-              <span>⚠️</span><span>Transaksi ini terhubung ke catatan utang/piutang.</span>
+              <span>⚠️</span>
+              <span>Transaksi ini terhubung ke catatan utang/piutang. Sebaiknya ubah langsung dari halaman Utang & Piutang.</span>
             </div>
           )}
           {selectedWalletPocket === 'kantor' && (
             <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl text-xs text-purple-800 flex gap-2">
-              <span>🏢</span><span>Transaksi ini tidak dihitung ke keuangan pribadi kamu.</span>
+              <span>🏢</span>
+              <span>Transaksi ini akan <strong>tidak dihitung</strong> ke keuangan pribadi kamu.</span>
             </div>
           )}
-
-          {/* Tipe */}
           <div>
             <label className="label">Tipe</label>
             <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => setForm({ ...form, type: 'expense', category_id: '', subcategory_id: '' })} className={`btn ${form.type === 'expense' ? 'bg-red-50 text-red-700 border-red-200 border' : 'btn-secondary'}`}>💸 Pengeluaran</button>
-              <button onClick={() => setForm({ ...form, type: 'income', category_id: '', subcategory_id: '' })} className={`btn ${form.type === 'income' ? 'bg-green-50 text-green-700 border-green-200 border' : 'btn-secondary'}`}>💰 Pemasukan</button>
+              <button onClick={() => setForm({ ...form, type: 'expense', category_id: '' })} className={`btn ${form.type === 'expense' ? 'bg-red-50 text-red-700 border-red-200 border' : 'btn-secondary'}`}>💸 Pengeluaran</button>
+              <button onClick={() => setForm({ ...form, type: 'income', category_id: '' })} className={`btn ${form.type === 'income' ? 'bg-green-50 text-green-700 border-green-200 border' : 'btn-secondary'}`}>💰 Pemasukan</button>
             </div>
           </div>
-
-          {/* Jumlah */}
           <div>
             <label className="label">Jumlah</label>
-            <input className="input text-xl font-bold" type="number" inputMode="numeric" placeholder="0" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} />
+            <input className="input text-xl font-bold" type="number" inputMode="numeric" placeholder="0" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
           </div>
-
-          {/* Dompet */}
           <div>
             <label className="label">Dompet</label>
-            <select className="input" value={form.wallet_id} onChange={e => setForm({ ...form, wallet_id: e.target.value, is_reimbursable: false })}>
+            <select className="input" value={form.wallet_id} onChange={(e) => setForm({ ...form, wallet_id: e.target.value, is_reimbursable: false })}>
               <option value="">Pilih dompet</option>
               {wallets.map(w => (
                 <option key={w.id} value={w.id}>
@@ -527,83 +696,41 @@ export default function TransactionsPage() {
               ))}
             </select>
           </div>
-
-          {/* Kategori — 2-level picker */}
-          <div className="space-y-2">
-            <div>
-              <label className="label">Kategori</label>
-              <select
-                className="input"
-                value={form.category_id}
-                onChange={e => setForm({ ...form, category_id: e.target.value, subcategory_id: '' })}
-              >
-                <option value="">Pilih kategori</option>
-                {filteredParentCats.map(c => (
-                  <option key={c.id} value={c.id}>{c.icon} {c.name}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Subkategori — muncul setelah pilih parent */}
-            {form.category_id && hasSubs && (
-              <div>
-                <label className="label">
-                  Subkategori <span className="text-red-400">*</span>
-                </label>
-                <div className="grid grid-cols-2 gap-1.5 p-2 bg-surface-50 rounded-xl border border-surface-100">
-                  {subcategories.map(sub => {
-                    const parent = categories.find(c => c.id === form.category_id)
-                    return (
-                      <button
-                        key={sub.id}
-                        type="button"
-                        onClick={() => setForm({ ...form, subcategory_id: sub.id })}
-                        className={`flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-all text-left
-                          ${form.subcategory_id === sub.id
-                            ? 'text-white shadow-sm'
-                            : 'bg-white text-surface-600 hover:bg-surface-100 border border-surface-100'
-                          }`}
-                        style={form.subcategory_id === sub.id ? { background: parent?.color || '#3b82f6' } : {}}
-                      >
-                        <span className="text-base flex-shrink-0">{sub.icon}</span>
-                        <span className="truncate text-xs leading-tight">{sub.name}</span>
-                      </button>
-                    )
-                  })}
-                </div>
-                {!form.subcategory_id && (
-                  <p className="text-xs text-red-400 mt-1">Pilih subkategori untuk melanjutkan</p>
-                )}
-              </div>
-            )}
+          <div>
+            <label className="label">Kategori</label>
+            <select className="input" value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })}>
+              <option value="">Pilih kategori</option>
+              {filteredCats.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
+            </select>
           </div>
-
-          {/* Keterangan */}
           <div>
             <label className="label">Keterangan</label>
-            <input className="input" placeholder="mis. Makan siang, Grab ke kantor..." value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} />
+            <input className="input" placeholder="mis. Makan siang" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
           </div>
-
-          {/* Tanggal */}
           <div>
             <label className="label">Tanggal</label>
-            <input className="input" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
+            <input className="input" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
           </div>
-
-          {/* Trip tag */}
           {selectedWalletPocket !== 'kantor' && trips.length > 0 && (
             <div>
               <label className="label">🧳 Tag ke Trip (opsional)</label>
-              <select className="input" value={form.trip_id} onChange={e => setForm({ ...form, trip_id: e.target.value })}>
+              <select
+                className="input"
+                value={form.trip_id}
+                onChange={(e) => setForm({ ...form, trip_id: e.target.value })}
+              >
                 <option value="">— Tidak terhubung trip —</option>
                 {trips.map(t => (
-                  <option key={t.id} value={t.id}>{t.emoji} {t.name} ({t.start_date}{t.end_date ? ` – ${t.end_date}` : ''})</option>
+                  <option key={t.id} value={t.id}>
+                    {t.emoji} {t.name} ({t.start_date ? t.start_date : 'Open'}{t.end_date ? ` – ${t.end_date}` : ''})
+                  </option>
                 ))}
               </select>
+              {form.trip_id && (
+                <p className="text-[10px] text-blue-600 mt-1">✓ Transaksi ini akan muncul di ringkasan trip tersebut</p>
+              )}
             </div>
           )}
-
-          {/* Reimburse toggle */}
           {selectedWalletPocket && selectedWalletPocket !== 'kantor' && form.type === 'expense' && (
             <button
               onClick={() => setForm({ ...form, is_reimbursable: !(form as any).is_reimbursable })}
@@ -613,54 +740,70 @@ export default function TransactionsPage() {
                 <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all ${(form as any).is_reimbursable ? 'left-5' : 'left-1'}`} />
               </div>
               <div>
-                <p className={`text-xs font-bold ${(form as any).is_reimbursable ? 'text-amber-800' : 'text-surface-600'}`}>🏢 Ini pengeluaran untuk keperluan kantor</p>
+                <p className={`text-xs font-bold ${(form as any).is_reimbursable ? 'text-amber-800' : 'text-surface-600'}`}>
+                  🏢 Ini pengeluaran untuk keperluan kantor
+                </p>
                 <p className="text-[10px] text-surface-400 mt-0.5">Pakai dompet pribadi, nanti reimburse dari kantor</p>
               </div>
             </button>
           )}
-
-          {/* Investasi auto-link notice */}
           {!editing && form.type === 'expense' && form.category_id && isInvestmentCategory(form.category_id) && (
             <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
               <span>📈</span>
               <span>Akan <strong>otomatis tercatat di Aset</strong> dengan nama "{form.description || categories.find(c => c.id === form.category_id)?.name}".</span>
             </div>
           )}
-
           <div className="flex gap-2 pt-1">
             {editing && <button onClick={() => { deleteTx(editing.id); setShowAdd(false) }} className="btn btn-danger flex-1">Hapus</button>}
             <button onClick={saveTransaction} className="btn btn-primary flex-1">{editing ? 'Simpan' : 'Tambah'}</button>
           </div>
         </div>
       </Modal>
-
-      {/* Reimburse Modal */}
+      {/* Reimburse Confirmation Modal */}
       <Modal open={!!reimburseTarget} onClose={() => setReimburseTarget(null)} title="Konfirmasi Reimburse">
         {reimburseTarget && (
           <div className="space-y-4">
+            {/* Info transaksi */}
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
               <p className="text-xs text-amber-700 font-bold mb-0.5">Transaksi yang direimburse:</p>
               <p className="text-sm font-semibold text-surface-800">{reimburseTarget.description || (reimburseTarget as any).categories?.name || 'Transaksi'}</p>
               <p className="text-xs text-surface-500">{formatDate(reimburseTarget.date)} · {(reimburseTarget as any).wallets?.name}</p>
               <p className="text-lg font-extrabold text-amber-700 font-mono mt-1">{formatCurrency(Number(reimburseTarget.amount))}</p>
             </div>
+
+            {/* Wallet tujuan */}
             <div>
               <label className="label">Masuk ke wallet mana?</label>
-              <select className="input" value={reimburseForm.wallet_id} onChange={e => setReimburseForm({ ...reimburseForm, wallet_id: e.target.value })}>
+              <select
+                className="input"
+                value={reimburseForm.wallet_id}
+                onChange={(e) => setReimburseForm({ ...reimburseForm, wallet_id: e.target.value })}
+              >
                 <option value="">Pilih wallet</option>
                 {wallets.filter(w => w.pocket !== 'kantor').map(w => (
-                  <option key={w.id} value={w.id}>{w.pocket === 'tabungan' ? '💰' : '👤'} {w.name}</option>
+                  <option key={w.id} value={w.id}>
+                    {w.pocket === 'tabungan' ? '💰' : '👤'} {w.name}
+                  </option>
                 ))}
               </select>
             </div>
+
+            {/* Tanggal reimburse diterima */}
             <div>
               <label className="label">Tanggal diterima</label>
-              <input className="input" type="date" value={reimburseForm.date} onChange={e => setReimburseForm({ ...reimburseForm, date: e.target.value })} />
+              <input
+                className="input"
+                type="date"
+                value={reimburseForm.date}
+                onChange={(e) => setReimburseForm({ ...reimburseForm, date: e.target.value })}
+              />
             </div>
+
             <div className="p-3 bg-green-50 border border-green-200 rounded-xl text-xs text-green-800 flex gap-2">
               <span>💡</span>
-              <span>Akan otomatis dibuat transaksi <strong>pemasukan {formatCurrency(Number(reimburseTarget.amount))}</strong>.</span>
+              <span>Akan otomatis dibuat transaksi <strong>pemasukan {formatCurrency(Number(reimburseTarget.amount))}</strong> di wallet yang dipilih.</span>
             </div>
+
             <div className="flex gap-2 pt-1">
               <button onClick={() => setReimburseTarget(null)} className="btn btn-secondary flex-1">Batal</button>
               <button onClick={confirmReimburse} className="btn btn-primary flex-1">✅ Konfirmasi</button>
