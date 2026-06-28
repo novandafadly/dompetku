@@ -62,11 +62,10 @@ export default function BudgetsPage() {
   async function load() {
     const startOfMonth = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-01`
     const endOfMonth = new Date(selectedYear, selectedMonth, 0).toISOString().split('T')[0]
-    const { data: { user: sessionUser } } = await supabase.auth.getUser()
-    const session = sessionUser ? { user: sessionUser } : null
+    const { data: { session } } = await supabase.auth.getSession()
 
     const [b, c, t, w, p] = await Promise.all([
-      supabase.from('budgets').select('*, categories(*)').eq('period_month', selectedMonth).eq('period_year', selectedYear),
+      supabase.from('budgets').select('*').eq('period_month', selectedMonth).eq('period_year', selectedYear),
       supabase.from('categories').select('*').eq('type', 'expense').order('name'),
       supabase.from('transactions').select('*, wallets(pocket)').eq('type', 'expense').gte('date', startOfMonth).lte('date', endOfMonth),
       supabase.from('wallets').select('*').eq('is_active', true).eq('pocket', 'tabungan').order('name'),
@@ -75,7 +74,10 @@ export default function BudgetsPage() {
         : Promise.resolve({ data: null }),
     ])
 
-    setBudgets((b.data) || [])
+    const catMap2: Record<string, any> = {}
+    ;(c.data || []).forEach((x: any) => { catMap2[x.id] = x })
+    const budgetJoined = (b.data || []).map((x: any) => ({ ...x, categories: catMap2[x.category_id] || null }))
+    setBudgets(budgetJoined)
     setCategories((c.data) || [])
     setTransactions(filterPersonalTransactions((t.data) || []))
     setTabunganWallets((w.data) || [])
@@ -89,11 +91,10 @@ export default function BudgetsPage() {
   }
 
   async function saveBudget() {
-    const { data: { user } } = await supabase.auth.getUser()
-    const session = user ? { user } : null
+    const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
     const amount = Number(form.amount)
-    if (!amount || amount <= 0 || !form.category_id) { toast('Lengkapi data!', '⚠️'); return }
+    if (!amount || !form.category_id) { toast('Lengkapi data!', '⚠️'); return }
     if (editing) {
       const { error } = await supabase.from('budgets').update({ amount, category_id: form.category_id }).eq('id', editing.id)
       if (error) { toast(error.message, '❌'); return }
@@ -118,8 +119,7 @@ export default function BudgetsPage() {
   }
 
   async function copyFromLastMonth() {
-    const { data: { user } } = await supabase.auth.getUser()
-    const session = user ? { user } : null
+    const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
     const prevM = selectedMonth === 1 ? 12 : selectedMonth - 1
     const prevY = selectedMonth === 1 ? selectedYear - 1 : selectedYear
@@ -156,8 +156,7 @@ export default function BudgetsPage() {
   }
 
   async function savePlan() {
-    const { data: { user } } = await supabase.auth.getUser()
-    const session = user ? { user } : null
+    const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
     const income = Number(planIncome)
     if (!income) { toast('Isi estimasi income dulu!', '⚠️'); return }
