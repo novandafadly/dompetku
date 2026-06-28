@@ -71,7 +71,7 @@ export default function TransactionsPage() {
   async function load() {
     const { data: { session } } = await supabase.auth.getSession()
     const [t, w, c, tr] = await Promise.all([
-      supabase.from('transactions').select('*, categories(*), wallets(*)').order('date', { ascending: false }).order('created_at', { ascending: false }).limit(300),
+      supabase.from('transactions').select('*, categories(*), wallets(*), subcategories:subcategory_id(id,name,icon,color)').order('date', { ascending: false }).order('created_at', { ascending: false }).limit(300),
       supabase.from('wallets').select('*').eq('is_active', true),
       supabase.from('categories').select('*').order('name'),
       session
