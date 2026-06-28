@@ -42,27 +42,37 @@ export default function DashboardPage() {
     const startOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
     const sixMonthsAgo = new Date(); sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5); sixMonthsAgo.setDate(1)
 
-    const [w, t, b, a, d, r, s] = await Promise.all([
+    const [w, t, b, a, d, r, s, c] = await Promise.all([
       supabase.from('wallets').select('*').eq('is_active', true),
-      supabase.from('transactions').select('*, categories(*), wallets(*)').gte('date', startOfMonth).order('date', { ascending: false }),
-      supabase.from('budgets').select('*, categories(*)').eq('period_month', now.getMonth() + 1).eq('period_year', now.getFullYear()),
+      supabase.from('transactions').select('*').gte('date', startOfMonth).order('date', { ascending: false }),
+      supabase.from('budgets').select('*').eq('period_month', now.getMonth() + 1).eq('period_year', now.getFullYear()),
       supabase.from('assets').select('*'),
       supabase.from('debts').select('*').eq('is_completed', false),
-      supabase.from('recurring_transactions').select('*, wallets(*), categories(*)').eq('is_active', true).order('next_due'),
+      supabase.from('recurring_transactions').select('*').eq('is_active', true).order('next_due'),
       supabase.from('net_worth_snapshots').select('*').gte('snapshot_date', sixMonthsAgo.toISOString().split('T')[0]).order('snapshot_date'),
+      supabase.from('categories').select('*'),
     ])
 
+    // JS join — tidak pakai PostgREST embedded join
+    const walletMap: Record<string, any> = {}
+    const catMap: Record<string, any> = {}
+    ;(w.data || []).forEach((x: any) => { walletMap[x.id] = x })
+    ;(c.data || []).forEach((x: any) => { catMap[x.id] = x })
+    const txJoined = (t.data || []).map((x: any) => ({ ...x, wallets: walletMap[x.wallet_id] || null, categories: catMap[x.category_id] || null }))
+    const budgetJoined = (b.data || []).map((x: any) => ({ ...x, categories: catMap[x.category_id] || null }))
+    const recurringJoined = (r.data || []).map((x: any) => ({ ...x, wallets: walletMap[x.wallet_id] || null, categories: catMap[x.category_id] || null }))
+
     setWallets(w.data || [])
-    setTransactions(t.data || [])
-    setBudgets(b.data || [])
+    setTransactions(txJoined)
+    setBudgets(budgetJoined)
     setAssets(a.data || [])
     setDebts(d.data || [])
-    setRecurring(r.data || [])
+    setRecurring(recurringJoined)
     setSnapshots(s.data || [])
-    setLoading(false) // UI ready — snapshot jalan di background, tidak block render
+    setLoading(false)
 
-    // Fire-and-forget: tidak perlu await, tidak affect loading time
-    saveSnapshot(w.data || [], a.data || [], d.data || [])
+    // Save today's snapshot
+    await saveSnapshot(w.data || [], a.data || [], d.data || [])
   }
 
   async function saveSnapshot(w: Wallet[], a: Asset[], d: Debt[]) {
