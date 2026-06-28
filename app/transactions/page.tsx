@@ -71,14 +71,24 @@ export default function TransactionsPage() {
   async function load() {
     const { data: { session } } = await supabase.auth.getSession()
     const [t, w, c, tr] = await Promise.all([
-      supabase.from('transactions').select('*, categories(*), wallets(*), subcategories:subcategory_id(id,name,icon,color)').order('date', { ascending: false }).order('created_at', { ascending: false }).limit(300),
+      supabase.from('transactions').select('*, categories(*), wallets(*)').order('date', { ascending: false }).order('created_at', { ascending: false }).limit(300),
       supabase.from('wallets').select('*').eq('is_active', true),
       supabase.from('categories').select('*').order('name'),
       session
         ? supabase.from('trips').select('id, name, emoji, start_date, end_date').eq('user_id', session.user.id).order('start_date', { ascending: false })
         : Promise.resolve({ data: [] }),
     ])
-    setTransactions((t.data) || [])
+
+    // Join subcategory di JS — lebih reliable daripada PostgREST embedded FK
+    // (PostgREST schema cache kadang tidak sync setelah migrasi kolom baru)
+    const allCats: Record<string, any> = {}
+    ;(c.data || []).forEach((cat: any) => { allCats[cat.id] = cat })
+    const txWithSubs = (t.data || []).map((tx: any) => ({
+      ...tx,
+      subcategories: tx.subcategory_id ? allCats[tx.subcategory_id] || null : null,
+    }))
+
+    setTransactions(txWithSubs)
     setWallets((w.data) || [])
     setCategories((c.data) || [])
     setTrips((tr as any).data || [])
