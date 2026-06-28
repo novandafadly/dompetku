@@ -59,10 +59,10 @@ export default function DashboardPage() {
     setDebts(d.data || [])
     setRecurring(r.data || [])
     setSnapshots(s.data || [])
-    setLoading(false)
+    setLoading(false) // UI ready — snapshot jalan di background, tidak block render
 
-    // Save today's snapshot
-    await saveSnapshot(w.data || [], a.data || [], d.data || [])
+    // Fire-and-forget: tidak perlu await, tidak affect loading time
+    saveSnapshot(w.data || [], a.data || [], d.data || [])
   }
 
   async function saveSnapshot(w: Wallet[], a: Asset[], d: Debt[]) {
