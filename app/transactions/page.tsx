@@ -19,6 +19,7 @@ type Trip = {
 type FormState = {
   wallet_id: string
   category_id: string
+  subcategory_id: string
   type: 'income' | 'expense'
   amount: string
   description: string
@@ -28,7 +29,7 @@ type FormState = {
 }
 
 const emptyForm: FormState = {
-  wallet_id: '', category_id: '', type: 'expense', amount: '',
+  wallet_id: '', category_id: '', subcategory_id: '', type: 'expense', amount: '',
   description: '', date: new Date().toISOString().split('T')[0],
   is_reimbursable: false,
   trip_id: '',
@@ -153,6 +154,7 @@ export default function TransactionsPage() {
     setForm({
       wallet_id: tx.wallet_id,
       category_id: tx.category_id || '',
+      subcategory_id: (tx as any).subcategory_id || '',
       type: tx.type,
       amount: String(tx.amount),
       description: tx.description || '',
@@ -181,6 +183,7 @@ export default function TransactionsPage() {
         user_id: session.user.id,
         wallet_id: form.wallet_id,
         category_id: form.category_id || null,
+        subcategory_id: (form as any).subcategory_id || null,
         type: form.type,
         amount,
         description: form.description || null,
@@ -197,6 +200,7 @@ export default function TransactionsPage() {
         user_id: session.user.id,
         wallet_id: form.wallet_id,
         category_id: form.category_id || null,
+        subcategory_id: (form as any).subcategory_id || null,
         type: form.type,
         amount,
         description: form.description || null,
@@ -303,6 +307,38 @@ export default function TransactionsPage() {
   }), [baseTxs, search, filterType, filterCat, filterWallet, filterDateFrom, filterDateTo])
 
   const filteredCats = categories.filter(c => !form.type || c.type === form.type)
+
+  // Hierarchy untuk dropdown form — parent sebagai group, sub sebagai pilihan
+  const formParentCats = filteredCats.filter((c: any) => !c.parent_id)
+  const formSubMap = filteredCats.reduce((acc: Record<string, any[]>, c: any) => {
+    if (c.parent_id) {
+      if (!acc[c.parent_id]) acc[c.parent_id] = []
+      acc[c.parent_id].push(c)
+    }
+    return acc
+  }, {})
+
+  // Saat category_id berubah: kalau pilih parent yg punya sub → clear category_id
+  // Kalau pilih sub → set category_id = parent, subcategory_id = sub
+  function handleCatSelect(selectedId: string) {
+    const cat = categories.find((c: any) => c.id === selectedId)
+    if (!cat) { setForm({ ...form, category_id: '', subcategory_id: '' }); return }
+    const isParent = !(cat as any).parent_id
+    const hasSubs = formSubMap[selectedId]?.length > 0
+    if (isParent && hasSubs) {
+      // Jangan set dulu, user harus pilih sub
+      setForm({ ...form, category_id: selectedId, subcategory_id: '' })
+    } else if (!isParent) {
+      // Pilih subcategory → set parent + sub
+      setForm({ ...form, category_id: (cat as any).parent_id, subcategory_id: selectedId })
+    } else {
+      // Parent tanpa sub
+      setForm({ ...form, category_id: selectedId, subcategory_id: '' })
+    }
+  }
+
+  // Value yang tampil di select: kalau ada subcategory_id pakai itu, kalau tidak pakai category_id
+  const catSelectValue = (form as any).subcategory_id || form.category_id
   const totalIncome = useMemo(() => filtered.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0), [filtered])
   const totalExpense = useMemo(() => filtered.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0), [filtered])
 
@@ -780,8 +816,8 @@ export default function TransactionsPage() {
           <div>
             <label className="label">Tipe</label>
             <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => setForm({ ...form, type: 'expense', category_id: '' })} className={`btn ${form.type === 'expense' ? 'bg-red-50 text-red-700 border-red-200 border' : 'btn-secondary'}`}>💸 Pengeluaran</button>
-              <button onClick={() => setForm({ ...form, type: 'income', category_id: '' })} className={`btn ${form.type === 'income' ? 'bg-green-50 text-green-700 border-green-200 border' : 'btn-secondary'}`}>💰 Pemasukan</button>
+              <button onClick={() => setForm({ ...form, type: 'expense', category_id: '', subcategory_id: '' })} className={`btn ${form.type === 'expense' ? 'bg-red-50 text-red-700 border-red-200 border' : 'btn-secondary'}`}>💸 Pengeluaran</button>
+              <button onClick={() => setForm({ ...form, type: 'income', category_id: '', subcategory_id: '' })} className={`btn ${form.type === 'income' ? 'bg-green-50 text-green-700 border-green-200 border' : 'btn-secondary'}`}>💰 Pemasukan</button>
             </div>
           </div>
           <div>
@@ -801,10 +837,28 @@ export default function TransactionsPage() {
           </div>
           <div>
             <label className="label">Kategori</label>
-            <select className="input" value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })}>
+            <select className="input" value={catSelectValue} onChange={(e) => handleCatSelect(e.target.value)}>
               <option value="">Pilih kategori</option>
-              {filteredCats.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
+              {formParentCats.map((parent: any) => {
+                const subs = formSubMap[parent.id] || []
+                if (subs.length === 0) {
+                  // Parent tanpa sub — langsung bisa dipilih
+                  return <option key={parent.id} value={parent.id}>{parent.icon} {parent.name}</option>
+                }
+                // Parent dengan sub — tampil sebagai group header, sub sebagai option
+                return (
+                  <optgroup key={parent.id} label={`${parent.icon} ${parent.name}`}>
+                    {subs.map((sub: any) => (
+                      <option key={sub.id} value={sub.id}>{sub.icon} {sub.name}</option>
+                    ))}
+                  </optgroup>
+                )
+              })}
             </select>
+            {/* Hint kalau parent dipilih tapi belum ada sub yang dipilih */}
+            {form.category_id && formSubMap[form.category_id]?.length > 0 && !(form as any).subcategory_id && (
+              <p className="text-[10px] text-amber-600 mt-1">⬆️ Pilih subkategori di atas</p>
+            )}
           </div>
           <div>
             <label className="label">Keterangan</label>
