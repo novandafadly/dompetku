@@ -60,14 +60,26 @@ export default function TripsPage() {
 
     const [tr, tx, w, c, excl] = await Promise.all([
       supabase.from('trips').select('*').eq('user_id', session.user.id).order('created_at', { ascending: false }),
-      supabase.from('transactions').select('*, categories(*), wallets(*)').order('date', { ascending: false }).limit(500),
+      supabase.from('transactions').select('*').order('date', { ascending: false }).limit(500),
       supabase.from('wallets').select('*').eq('is_active', true).order('name'),
       supabase.from('categories').select('*').order('name'),
       supabase.from('trip_excluded_transactions').select('trip_id, transaction_id').eq('user_id', session.user.id),
     ])
 
+    // JS join — hindari PostgREST embedded join yang tidak reliable
+    const walletMap: Record<string, any> = {}
+    const catMap: Record<string, any> = {}
+    ;(w.data || []).forEach((x: any) => { walletMap[x.id] = x })
+    ;(c.data || []).forEach((x: any) => { catMap[x.id] = x })
+    const txWithJoins = (tx.data || []).map((t: any) => ({
+      ...t,
+      wallets: walletMap[t.wallet_id] || null,
+      categories: catMap[t.category_id] || null,
+      subcategories: t.subcategory_id ? catMap[t.subcategory_id] || null : null,
+    }))
+
     setTrips(tr.data || [])
-    setTransactions((tx.data as any) || [])
+    setTransactions(txWithJoins)
     setWallets(w.data || [])
     setCategories(c.data || [])
 
