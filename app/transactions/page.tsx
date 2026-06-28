@@ -70,8 +70,11 @@ export default function TransactionsPage() {
 
   async function load() {
     const { data: { session } } = await supabase.auth.getSession()
+
+    // Fetch semua tabel secara terpisah — hindari PostgREST embedded join
+    // yang tidak reliable setelah schema migration
     const [t, w, c, tr] = await Promise.all([
-      supabase.from('transactions').select('*, categories(*), wallets(*)').order('date', { ascending: false }).order('created_at', { ascending: false }).limit(300),
+      supabase.from('transactions').select('*').order('date', { ascending: false }).order('created_at', { ascending: false }).limit(300),
       supabase.from('wallets').select('*').eq('is_active', true),
       supabase.from('categories').select('*').order('name'),
       session
@@ -79,16 +82,20 @@ export default function TransactionsPage() {
         : Promise.resolve({ data: [] }),
     ])
 
-    // Join subcategory di JS — lebih reliable daripada PostgREST embedded FK
-    // (PostgREST schema cache kadang tidak sync setelah migrasi kolom baru)
-    const allCats: Record<string, any> = {}
-    ;(c.data || []).forEach((cat: any) => { allCats[cat.id] = cat })
-    const txWithSubs = (t.data || []).map((tx: any) => ({
+    // Join manual di JavaScript
+    const walletMap: Record<string, any> = {}
+    const catMap: Record<string, any> = {}
+    ;(w.data || []).forEach((x: any) => { walletMap[x.id] = x })
+    ;(c.data || []).forEach((x: any) => { catMap[x.id] = x })
+
+    const txWithJoins = (t.data || []).map((tx: any) => ({
       ...tx,
-      subcategories: tx.subcategory_id ? allCats[tx.subcategory_id] || null : null,
+      wallets: walletMap[tx.wallet_id] || null,
+      categories: catMap[tx.category_id] || null,
+      subcategories: tx.subcategory_id ? catMap[tx.subcategory_id] || null : null,
     }))
 
-    setTransactions(txWithSubs)
+    setTransactions(txWithJoins)
     setWallets((w.data) || [])
     setCategories((c.data) || [])
     setTrips((tr as any).data || [])
