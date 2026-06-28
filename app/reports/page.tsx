@@ -26,7 +26,6 @@ export default function ReportsPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [recurring, setRecurring] = useState<RecurringTransaction[]>([])
   const [loading, setLoading] = useState(true)
-  const [drilldownCatId, setDrilldownCatId] = useState<string | null>(null)
   const now = new Date()
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1)
   const [selectedYear, setSelectedYear] = useState(now.getFullYear())
@@ -35,13 +34,23 @@ export default function ReportsPage() {
 
   async function load() {
     const sixMonthsAgo = new Date(); sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5); sixMonthsAgo.setDate(1)
-    const [t, r] = await Promise.all([
-      supabase.from('transactions')
-        .select('*, categories(*), wallets(*), subcategories:subcategory_id(id,name,icon,color)')
-        .gte('date', sixMonthsAgo.toISOString().split('T')[0]).order('date'),
+    const [t, w, c, r] = await Promise.all([
+      supabase.from('transactions').select('*').gte('date', sixMonthsAgo.toISOString().split('T')[0]).order('date'),
+      supabase.from('wallets').select('*'),
+      supabase.from('categories').select('*'),
       supabase.from('recurring_transactions').select('*'),
     ])
-    setTransactions(t.data || [])
+    const walletMap: Record<string, any> = {}
+    const catMap: Record<string, any> = {}
+    ;(w.data || []).forEach((x: any) => { walletMap[x.id] = x })
+    ;(c.data || []).forEach((x: any) => { catMap[x.id] = x })
+    const txJoined = (t.data || []).map((x: any) => ({
+      ...x,
+      wallets: walletMap[x.wallet_id] || null,
+      categories: catMap[x.category_id] || null,
+      subcategories: x.subcategory_id ? catMap[x.subcategory_id] || null : null,
+    }))
+    setTransactions(txJoined)
     setRecurring(r.data || [])
     setLoading(false)
   }
@@ -57,10 +66,7 @@ export default function ReportsPage() {
     })
   }, [transactions])
 
-  const selTx = useMemo(() =>
-    transactions.filter(t => t.date >= startOfMonth(selectedYear, selectedMonth) && t.date <= endOfMonth(selectedYear, selectedMonth)),
-    [transactions, selectedMonth, selectedYear]
-  )
+  const selTx = useMemo(() => transactions.filter(t => t.date >= startOfMonth(selectedYear, selectedMonth) && t.date <= endOfMonth(selectedYear, selectedMonth)), [transactions, selectedMonth, selectedYear])
   const selIncome = useMemo(() => selTx.filter(t => t.type === 'income').reduce((s,t) => s+Number(t.amount),0), [selTx])
   const selExpense = useMemo(() => selTx.filter(t => t.type === 'expense').reduce((s,t) => s+Number(t.amount),0), [selTx])
 
@@ -73,36 +79,15 @@ export default function ReportsPage() {
   const recurringMonthly = useMemo(() => normalizeRecurringToMonthly(recurring), [recurring])
   const freeCashflow = selIncome - selExpense - recurringMonthly
 
-  // Expense by parent category — simpan id untuk drilldown
   const expByCat = useMemo(() => {
-    const map: Record<string, { id: string; name: string; value: number; icon: string }> = {}
+    const map: Record<string, { name: string; value: number; icon: string }> = {}
     selTx.filter(t => t.type==='expense').forEach(t => {
-      const key = t.category_id || 'unknown'
-      const name = (t as any).categories?.name || 'Lainnya'
-      const icon = (t as any).categories?.icon || '📦'
-      if (!map[key]) map[key] = { id: key, name, value: 0, icon }
+      const key = t.categories?.name || 'Lainnya'
+      if (!map[key]) map[key] = { name: key, value: 0, icon: t.categories?.icon || '📦' }
       map[key].value += Number(t.amount)
     })
     return Object.values(map).sort((a,b) => b.value - a.value)
   }, [selTx])
-
-  // Drilldown: breakdown subcategory dari parent yang diklik
-  const drilldownData = useMemo(() => {
-    if (!drilldownCatId) return []
-    const map: Record<string, { name: string; value: number; icon: string }> = {}
-    selTx
-      .filter(t => t.type === 'expense' && t.category_id === drilldownCatId)
-      .forEach(t => {
-        const sub = (t as any).subcategories
-        const key = sub?.name || '— Tanpa subkategori'
-        const icon = sub?.icon || '📦'
-        if (!map[key]) map[key] = { name: key, value: 0, icon }
-        map[key].value += Number(t.amount)
-      })
-    return Object.values(map).sort((a, b) => b.value - a.value)
-  }, [selTx, drilldownCatId])
-
-  const drilldownParent = expByCat.find(c => c.id === drilldownCatId)
 
   const topExpenses = useMemo(() => [...selTx].filter(t=>t.type==='expense').sort((a,b)=>Number(b.amount)-Number(a.amount)).slice(0,5), [selTx])
 
@@ -126,7 +111,7 @@ export default function ReportsPage() {
           <p className="text-xs text-surface-400">Analitik keuangan bulanan</p>
         </div>
         <select className="input w-auto text-sm" value={`${selectedYear}-${selectedMonth}`}
-          onChange={e => { const [y,m] = e.target.value.split('-'); setSelectedYear(Number(y)); setSelectedMonth(Number(m)); setDrilldownCatId(null) }}>
+          onChange={e => { const [y,m] = e.target.value.split('-'); setSelectedYear(Number(y)); setSelectedMonth(Number(m)) }}>
           {monthOptions.map(o => <option key={`${o.year}-${o.month}`} value={`${o.year}-${o.month}`}>{o.label}</option>)}
         </select>
       </div>
@@ -144,7 +129,7 @@ export default function ReportsPage() {
         </div>
       </div>
 
-      {/* Metrics */}
+      {/* Metrics row */}
       <div className="grid grid-cols-3 gap-2 sm:gap-4 mb-4">
         {[
           { label: 'Pemasukan', val: selIncome, prev: prevIncome, color: 'text-green-600', up: true },
@@ -157,7 +142,9 @@ export default function ReportsPage() {
             <div key={m.label} className="card p-3 sm:p-4">
               <p className="text-[10px] font-bold text-surface-400 uppercase mb-1">{m.label}</p>
               <p className={`text-base sm:text-xl font-extrabold ${m.color} font-mono`}>{formatShort(m.val)}</p>
-              <p className={`text-[10px] font-semibold mt-0.5 ${good?'text-green-500':'text-red-400'}`}>{chg>=0?'↑':'↓'}{Math.abs(chg).toFixed(0)}% vs lalu</p>
+              <p className={`text-[10px] font-semibold mt-0.5 ${good?'text-green-500':'text-red-400'}`}>
+                {chg>=0?'↑':'↓'}{Math.abs(chg).toFixed(0)}% vs lalu
+              </p>
             </div>
           )
         })}
@@ -194,61 +181,25 @@ export default function ReportsPage() {
         </ResponsiveContainer>
       </div>
 
-      {/* Expense by Category — dengan drilldown subcategory */}
+      {/* Expense by Category */}
       <div className="card p-4 sm:p-6 mb-4">
-        <h3 className="text-sm font-bold text-surface-900 mb-1">Pengeluaran per Kategori — {MONTHS[selectedMonth-1]}</h3>
-        <p className="text-[10px] text-surface-400 mb-4">Ketuk kategori untuk lihat breakdown subkategori</p>
+        <h3 className="text-sm font-bold text-surface-900 mb-4">Pengeluaran per Kategori — {MONTHS[selectedMonth-1]}</h3>
         {expByCat.length > 0 ? (
           <div className="space-y-3">
             {expByCat.map((cat, i) => {
               const pct = selExpense > 0 ? (cat.value / selExpense) * 100 : 0
-              const isActive = drilldownCatId === cat.id
               return (
-                <div key={cat.id}>
-                  <button
-                    className={`w-full text-left transition-all rounded-xl p-2 -mx-2 ${isActive ? 'bg-surface-50' : 'hover:bg-surface-50'}`}
-                    onClick={() => setDrilldownCatId(isActive ? null : cat.id)}
-                  >
-                    <div className="flex items-center justify-between text-xs mb-1">
-                      <span className="font-semibold text-surface-700 truncate mr-2 flex items-center gap-1">
-                        {cat.icon} {cat.name}
-                        <span className="text-surface-300 text-[10px]">{isActive ? '▾' : '▸'}</span>
-                      </span>
-                      <div className="flex items-center gap-1.5 flex-shrink-0">
-                        <span className="text-surface-400">{pct.toFixed(0)}%</span>
-                        <span className="font-mono font-bold text-surface-800">{formatShort(cat.value)}</span>
-                      </div>
+                <div key={cat.name}>
+                  <div className="flex items-center justify-between text-xs mb-1">
+                    <span className="font-semibold text-surface-700 truncate mr-2">{cat.icon} {cat.name}</span>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <span className="text-surface-400">{pct.toFixed(0)}%</span>
+                      <span className="font-mono font-bold text-surface-800">{formatShort(cat.value)}</span>
                     </div>
-                    <div className="h-2 bg-surface-100 rounded-full overflow-hidden">
-                      <div className="h-full rounded-full transition-all" style={{ width:`${pct}%`, background: CAT_COLORS[i%CAT_COLORS.length] }} />
-                    </div>
-                  </button>
-
-                  {/* Drilldown subcategory */}
-                  {isActive && drilldownData.length > 0 && (
-                    <div className="mt-2 ml-4 pl-3 border-l-2 border-surface-100 space-y-2">
-                      {drilldownData.map((sub, j) => {
-                        const subPct = cat.value > 0 ? (sub.value / cat.value * 100) : 0
-                        return (
-                          <div key={sub.name}>
-                            <div className="flex items-center justify-between text-xs mb-1">
-                              <span className="text-surface-600 truncate mr-2">{sub.icon} {sub.name}</span>
-                              <div className="flex items-center gap-1.5 flex-shrink-0">
-                                <span className="text-surface-400">{subPct.toFixed(0)}%</span>
-                                <span className="font-mono font-semibold text-surface-700">{formatShort(sub.value)}</span>
-                              </div>
-                            </div>
-                            <div className="h-1.5 bg-surface-100 rounded-full overflow-hidden">
-                              <div className="h-full rounded-full" style={{ width:`${subPct}%`, background: CAT_COLORS[i%CAT_COLORS.length] + 'aa' }} />
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-                  {isActive && drilldownData.length === 0 && (
-                    <p className="text-[10px] text-surface-400 ml-4 mt-1 italic">Tidak ada breakdown subkategori</p>
-                  )}
+                  </div>
+                  <div className="h-2 bg-surface-100 rounded-full overflow-hidden">
+                    <div className="h-full rounded-full" style={{ width:`${pct}%`, background: CAT_COLORS[i%CAT_COLORS.length] }} />
+                  </div>
                 </div>
               )
             })}
@@ -261,28 +212,22 @@ export default function ReportsPage() {
         <h3 className="text-sm font-bold text-surface-900 mb-4">Top 5 Pengeluaran Terbesar</h3>
         {topExpenses.length > 0 ? (
           <div className="space-y-2">
-            {topExpenses.map((tx, i) => {
-              const sub = (tx as any).subcategories
-              return (
-                <div key={tx.id} className="flex items-center gap-3 p-3 rounded-xl bg-surface-50">
-                  <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-surface-500 bg-surface-200 flex-shrink-0">{i+1}</div>
-                  <div className="w-9 h-9 rounded-xl flex items-center justify-center text-base flex-shrink-0 bg-red-50">{(tx as any).categories?.icon || '💸'}</div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-surface-800 truncate">{tx.description || (tx as any).categories?.name || 'Pengeluaran'}</p>
-                    <p className="text-[10px] text-surface-400">
-                      {(tx as any).categories?.name}
-                      {sub?.name && <span className="text-surface-300"> › {sub.icon} {sub.name}</span>}
-                    </p>
-                  </div>
-                  <p className="text-sm font-bold font-mono text-red-500 flex-shrink-0">-{formatShort(Number(tx.amount))}</p>
+            {topExpenses.map((tx, i) => (
+              <div key={tx.id} className="flex items-center gap-3 p-3 rounded-xl bg-surface-50">
+                <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-surface-500 bg-surface-200 flex-shrink-0">{i+1}</div>
+                <div className="w-9 h-9 rounded-xl flex items-center justify-center text-base flex-shrink-0 bg-red-50">{tx.categories?.icon || '💸'}</div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-surface-800 truncate">{tx.description || tx.categories?.name || 'Pengeluaran'}</p>
+                  <p className="text-[10px] text-surface-400">{tx.wallets?.name}</p>
                 </div>
-              )
-            })}
+                <p className="text-sm font-bold font-mono text-red-500 flex-shrink-0">-{formatShort(Number(tx.amount))}</p>
+              </div>
+            ))}
           </div>
         ) : <p className="text-center py-8 text-surface-300 text-sm">Tidak ada transaksi</p>}
       </div>
 
-      {/* Monthly comparison */}
+      {/* Monthly comparison table - scrollable */}
       <div className="card p-4 sm:p-6">
         <h3 className="text-sm font-bold text-surface-900 mb-4">Perbandingan Bulanan</h3>
         <div className="overflow-x-auto -mx-1">
@@ -299,7 +244,7 @@ export default function ReportsPage() {
               {[...monthlyData].reverse().map((m, i) => {
                 const isSelected = m.month === selectedMonth && m.year === selectedYear
                 return (
-                  <tr key={i} onClick={() => { setSelectedMonth(m.month); setSelectedYear(m.year); setDrilldownCatId(null) }}
+                  <tr key={i} onClick={() => { setSelectedMonth(m.month); setSelectedYear(m.year) }}
                     className={`border-b border-surface-50 cursor-pointer ${isSelected?'bg-brand-50':'active:bg-surface-50'}`}>
                     <td className={`py-2.5 pr-3 font-semibold whitespace-nowrap ${isSelected?'text-brand-700':'text-surface-700'}`}>
                       {isSelected && '→ '}{MONTHS[m.month-1].slice(0,3)} {m.year}
