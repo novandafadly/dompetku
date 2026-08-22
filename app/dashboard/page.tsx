@@ -296,7 +296,7 @@ export default function DashboardPage() {
               <h3 className="text-sm font-bold text-surface-900 mb-4">Anggaran Bulan Ini</h3>
               <div className="space-y-3 overflow-y-auto max-h-52">
                 {budgets.length > 0 ? budgets.map((b) => {
-                  const spent = transactions.filter(t => t.type === 'expense' && t.category_id === b.category_id).reduce((s, t) => s + Number(t.amount), 0)
+                  const spent = personalTx.filter(t => t.type === 'expense' && t.category_id === b.category_id).reduce((s, t) => s + Number(t.amount), 0)
                   const pct = Math.min((spent / Number(b.amount)) * 100, 100)
                   const over = spent > Number(b.amount)
                   return (
