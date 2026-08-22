@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
-import type { Debt, Contact, Wallet } from '@/lib/supabase'
+import type { Debt, Contact, Wallet, Transaction } from '@/lib/supabase'
 import { formatCurrency, formatShort, formatDate } from '@/lib/utils'
 import AppShell from '@/components/AppShell'
 import Modal from '@/components/Modal'
@@ -81,6 +81,7 @@ export default function DebtsPage() {
   const [showContactModal, setShowContactModal] = useState(false)
   const [showContactDetail, setShowContactDetail] = useState(false)
   const [showPayModal, setShowPayModal] = useState(false)
+  const [showHistoryModal, setShowHistoryModal] = useState(false)
 
   const [editingDebt, setEditingDebt] = useState<Debt | null>(null)
   const [editingContact, setEditingContact] = useState<Contact | null>(null)
@@ -88,6 +89,9 @@ export default function DebtsPage() {
   const [payingDebt, setPayingDebt] = useState<Debt | null>(null)
   const [payAmount, setPayAmount] = useState('')
   const [payWalletId, setPayWalletId] = useState('')
+  const [historyDebt, setHistoryDebt] = useState<Debt | null>(null)
+  const [historyTx, setHistoryTx] = useState<Transaction[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
 
   const [debtForm, setDebtForm] = useState<DebtForm>(emptyDebtForm)
   const [contactForm, setContactForm] = useState<ContactForm>(emptyContactForm)
@@ -326,6 +330,43 @@ export default function DebtsPage() {
     setShowPayModal(false); setPayingDebt(null); load()
   }
 
+  // ── Riwayat cicilan/pembayaran ──────────────────────────
+  async function openHistory(d: Debt, e?: React.MouseEvent) {
+    e?.stopPropagation()
+    setHistoryDebt(d)
+    setShowHistoryModal(true)
+    setHistoryLoading(true)
+    const { data } = await supabase
+      .from('transactions')
+      .select('*, wallets(*)')
+      .eq('debt_id', d.id)
+      .order('date', { ascending: false })
+      .order('created_at', { ascending: false })
+    setHistoryTx(data || [])
+    setHistoryLoading(false)
+  }
+
+  function isPaymentEntry(tx: Transaction) {
+    return tx.description?.startsWith('[Bayar Hutang]') || tx.description?.startsWith('[Terima Piutang]')
+  }
+
+  async function deletePaymentEntry(tx: Transaction) {
+    if (!historyDebt) return
+    if (!confirm('Batalkan cicilan ini? Sisa hutang/piutang akan bertambah lagi.')) return
+
+    // Hapus transaksi — trigger auto-reverse balance wallet
+    await supabase.from('transactions').delete().eq('id', tx.id)
+
+    const newPaid = Math.max(Number(historyDebt.paid_amount) - Number(tx.amount), 0)
+    await supabase.from('debts').update({ paid_amount: newPaid, is_completed: false }).eq('id', historyDebt.id)
+
+    toast('Cicilan dibatalkan', '↩️')
+    const updatedDebt = { ...historyDebt, paid_amount: newPaid, is_completed: false }
+    setHistoryDebt(updatedDebt)
+    setHistoryTx(prev => prev.filter(t => t.id !== tx.id))
+    load()
+  }
+
   // ── Computed ─────────────────────────────────────────────
   const contactSummaries = useMemo((): ContactSummary[] => {
     return contacts.map(contact => {
@@ -404,7 +445,10 @@ export default function DebtsPage() {
             <div className="progress-bar mb-1">
               <div className="progress-fill" style={{ width: `${pct}%`, background: d.type === 'debt' ? '#ef4444' : '#22c55e' }} />
             </div>
-            <p className="text-[10px] text-surface-400">Dibayar {formatShort(Number(d.paid_amount))}</p>
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] text-surface-400">Dibayar {formatShort(Number(d.paid_amount))}</p>
+              <button onClick={(e) => openHistory(d, e)} className="text-[10px] font-semibold text-brand-600">📜 Riwayat Cicilan</button>
+            </div>
           </div>
         )}
 
@@ -418,7 +462,12 @@ export default function DebtsPage() {
           </div>
         )}
         {d.is_completed && (
-          <button onClick={(e) => deleteDebt(d.id, e)} className="btn btn-secondary text-xs w-full py-2 text-surface-400">Hapus catatan</button>
+          <div className="flex gap-2">
+            {Number(d.paid_amount) > 0 && (
+              <button onClick={(e) => openHistory(d, e)} className="btn btn-secondary text-xs flex-1 py-2">📜 Riwayat</button>
+            )}
+            <button onClick={(e) => deleteDebt(d.id, e)} className="btn btn-secondary text-xs flex-1 py-2 text-surface-400">Hapus catatan</button>
+          </div>
         )}
       </div>
     )
@@ -911,6 +960,46 @@ export default function DebtsPage() {
             </div>
 
             <button onClick={submitPay} className="btn btn-primary w-full">Simpan Pembayaran</button>
+          </div>
+        )}
+      </Modal>
+
+      {/* ── Riwayat Cicilan Modal ── */}
+      <Modal open={showHistoryModal} onClose={() => { setShowHistoryModal(false); setHistoryDebt(null); setHistoryTx([]) }} title="Riwayat Cicilan">
+        {historyDebt && (
+          <div>
+            <div className={`p-4 rounded-2xl mb-4 ${historyDebt.type === 'debt' ? 'bg-red-50' : 'bg-green-50'}`}>
+              <p className="text-xs text-surface-500 mb-1">{historyDebt.type === 'debt' ? 'Hutang saya' : 'Piutang saya'}</p>
+              <p className="text-sm font-semibold text-surface-800">{historyDebt.description || historyDebt.person_name}</p>
+              <div className="flex justify-between text-xs mt-2">
+                <span className="text-surface-500">Dibayar: <span className="font-bold font-mono">{formatCurrency(Number(historyDebt.paid_amount))}</span></span>
+                <span className="text-surface-500">Sisa: <span className="font-mono">{formatCurrency(Number(historyDebt.total_amount) - Number(historyDebt.paid_amount))}</span></span>
+              </div>
+            </div>
+
+            {historyLoading && <p className="text-center text-sm text-surface-400 py-6">Memuat...</p>}
+
+            {!historyLoading && historyTx.filter(isPaymentEntry).length === 0 && (
+              <p className="text-center text-sm text-surface-300 py-6">Belum ada cicilan yang dicatat</p>
+            )}
+
+            {!historyLoading && (
+              <div className="space-y-2">
+                {historyTx.filter(isPaymentEntry).map(tx => (
+                  <div key={tx.id} className="card p-3 flex items-center justify-between">
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold font-mono text-surface-800">{formatCurrency(Number(tx.amount))}</p>
+                      <p className="text-[10px] text-surface-400">
+                        {formatDate(tx.date)}{(tx as any).wallets && ` · ${(tx as any).wallets.icon || '💳'} ${(tx as any).wallets.name}`}
+                      </p>
+                    </div>
+                    <button onClick={() => deletePaymentEntry(tx)} className="btn btn-secondary text-xs px-3 py-1.5 hover:bg-red-50 hover:text-red-600">
+                      Batalkan
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </Modal>
