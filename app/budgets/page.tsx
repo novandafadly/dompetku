@@ -42,7 +42,9 @@ export default function BudgetsPage() {
   const now = new Date()
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1)
   const [selectedYear, setSelectedYear] = useState(now.getFullYear())
-  const [form, setForm] = useState({ category_id: '', amount: '' })
+  const [form, setForm] = useState({ category_id: '', amount: '', rollover_enabled: false })
+  const [prevBudgets, setPrevBudgets] = useState<Budget[]>([])
+  const [prevSpentByCategory, setPrevSpentByCategory] = useState<Record<string, number>>({})
 
   const [planIncome, setPlanIncome] = useState('')
   const [planAllocations, setPlanAllocations] = useState<SavingsAllocation[]>([])
@@ -64,7 +66,12 @@ export default function BudgetsPage() {
     const endOfMonth = new Date(selectedYear, selectedMonth, 0).toISOString().split('T')[0]
     const { data: { session } } = await supabase.auth.getSession()
 
-    const [b, c, t, w, p] = await Promise.all([
+    const prevM = selectedMonth === 1 ? 12 : selectedMonth - 1
+    const prevY = selectedMonth === 1 ? selectedYear - 1 : selectedYear
+    const prevStart = `${prevY}-${String(prevM).padStart(2, '0')}-01`
+    const prevEnd = new Date(prevY, prevM, 0).toISOString().split('T')[0]
+
+    const [b, c, t, w, p, pb, pt] = await Promise.all([
       supabase.from('budgets').select('*').eq('period_month', selectedMonth).eq('period_year', selectedYear),
       supabase.from('categories').select('*').eq('type', 'expense').order('name'),
       supabase.from('transactions').select('*, wallets(pocket)').eq('type', 'expense').gte('date', startOfMonth).lte('date', endOfMonth),
@@ -72,6 +79,8 @@ export default function BudgetsPage() {
       session
         ? supabase.from('budget_plan').select('*').eq('period_month', selectedMonth).eq('period_year', selectedYear).eq('user_id', session.user.id).maybeSingle()
         : Promise.resolve({ data: null }),
+      supabase.from('budgets').select('*').eq('period_month', prevM).eq('period_year', prevY).eq('rollover_enabled', true),
+      supabase.from('transactions').select('*, wallets(pocket)').eq('type', 'expense').gte('date', prevStart).lte('date', prevEnd),
     ])
 
     const catMap2: Record<string, any> = {}
@@ -82,12 +91,26 @@ export default function BudgetsPage() {
     setTransactions(filterPersonalTransactions((t.data) || []))
     setTabunganWallets((w.data) || [])
     setPlan((p as any).data || null)
+    setPrevBudgets((pb.data) || [])
+    const prevPersonalTx = filterPersonalTransactions((pt.data) || [])
+    const prevSpent: Record<string, number> = {}
+    prevPersonalTx.forEach((x: any) => { prevSpent[x.category_id] = (prevSpent[x.category_id] || 0) + Number(x.amount) })
+    setPrevSpentByCategory(prevSpent)
+  }
+
+  // Sisa budget bulan lalu (kategori dgn rollover aktif) yang dibawa ke bulan ini
+  function rolloverFor(categoryId: string): number {
+    const pb = prevBudgets.find(b => b.category_id === categoryId)
+    if (!pb) return 0
+    const spent = prevSpentByCategory[categoryId] || 0
+    const leftover = Number(pb.amount) - spent
+    return leftover > 0 ? leftover : 0
   }
 
   // ── Budget CRUD ────────────────────────────────────────
-  function openAdd() { setEditing(null); setForm({ category_id: '', amount: '' }); setShowModal(true) }
+  function openAdd() { setEditing(null); setForm({ category_id: '', amount: '', rollover_enabled: false }); setShowModal(true) }
   function openEdit(b: Budget) {
-    setEditing(b); setForm({ category_id: b.category_id, amount: String(b.amount) }); setShowModal(true)
+    setEditing(b); setForm({ category_id: b.category_id, amount: String(b.amount), rollover_enabled: !!b.rollover_enabled }); setShowModal(true)
   }
 
   async function saveBudget() {
@@ -96,13 +119,14 @@ export default function BudgetsPage() {
     const amount = Number(form.amount)
     if (!amount || !form.category_id) { toast('Lengkapi data!', '⚠️'); return }
     if (editing) {
-      const { error } = await supabase.from('budgets').update({ amount, category_id: form.category_id }).eq('id', editing.id)
+      const { error } = await supabase.from('budgets').update({ amount, category_id: form.category_id, rollover_enabled: form.rollover_enabled }).eq('id', editing.id)
       if (error) { toast(error.message, '❌'); return }
       toast('Anggaran diperbarui!', '✅')
     } else {
       const { error } = await supabase.from('budgets').insert({
         user_id: session.user.id, category_id: form.category_id, amount,
         period_month: selectedMonth, period_year: selectedYear,
+        rollover_enabled: form.rollover_enabled,
       })
       if (error) {
         toast(error.message.includes('duplicate key') ? 'Budget kategori ini sudah ada!' : error.message, '❌')
@@ -110,7 +134,7 @@ export default function BudgetsPage() {
       }
       toast('Anggaran ditambahkan!', '🎯')
     }
-    setShowModal(false); setEditing(null); setForm({ category_id: '', amount: '' }); load()
+    setShowModal(false); setEditing(null); setForm({ category_id: '', amount: '', rollover_enabled: false }); load()
   }
 
   async function deleteBudget(id: string) {
@@ -180,7 +204,9 @@ export default function BudgetsPage() {
   }
 
   // ── Computed ───────────────────────────────────────────
-  const totalBudget = budgets.reduce((s, b) => s + Number(b.amount), 0)
+  // Budget efektif = nominal budget + sisa bulan lalu (jika rollover aktif utk kategori itu bulan lalu)
+  const effectiveBudgetFor = (b: Budget) => Number(b.amount) + rolloverFor(b.category_id)
+  const totalBudget = budgets.reduce((s, b) => s + effectiveBudgetFor(b), 0)
   const totalSpent = budgets.reduce((s, b) =>
     s + transactions.filter(t => t.category_id === b.category_id).reduce((ss, t) => ss + Number(t.amount), 0), 0)
   const remaining = totalBudget - totalSpent
@@ -188,6 +214,14 @@ export default function BudgetsPage() {
   const totalAllocated = totalBudget + totalSavingsAlloc
   const unallocated = (plan?.estimated_income || 0) - totalAllocated
   const hasPlan = !!plan?.estimated_income
+
+  // ── Forecast — proyeksi pengeluaran akhir bulan berdasarkan pace harian ──
+  const daysInMonth = new Date(selectedYear, selectedMonth, 0).getDate()
+  const daysElapsed = isCurrentMonth ? Math.min(now.getDate(), daysInMonth) : daysInMonth
+  const totalForecast = isCurrentMonth && daysElapsed > 0 ? (totalSpent / daysElapsed) * daysInMonth : totalSpent
+  function forecastFor(spent: number): number {
+    return isCurrentMonth && daysElapsed > 0 ? (spent / daysElapsed) * daysInMonth : spent
+  }
 
   return (
     <AppShell>
@@ -346,7 +380,7 @@ export default function BudgetsPage() {
       {/* ── TAB REALISASI ── */}
       {activeTab === 'tracking' && (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
             <div className="metric-card">
               <div className="absolute inset-0 bg-gradient-to-br from-brand-50 to-transparent" />
               <div className="relative">
@@ -368,6 +402,16 @@ export default function BudgetsPage() {
                 <p className={`text-2xl font-extrabold ${remaining >= 0 ? 'text-green-600' : 'text-red-500'}`}>{formatShort(remaining)}</p>
               </div>
             </div>
+            {isCurrentMonth && (
+              <div className="metric-card">
+                <div className={`absolute inset-0 bg-gradient-to-br ${totalForecast > totalBudget ? 'from-amber-50' : 'from-surface-50'} to-transparent`} />
+                <div className="relative">
+                  <p className="text-xs font-bold text-surface-500 uppercase tracking-wider mb-1">Proyeksi Akhir Bulan</p>
+                  <p className={`text-2xl font-extrabold ${totalForecast > totalBudget ? 'text-amber-600' : 'text-surface-700'}`}>{formatShort(totalForecast)}</p>
+                  <p className="text-[10px] text-surface-400 mt-0.5">berdasar pace {daysElapsed}/{daysInMonth} hari</p>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="flex justify-end mb-3">
@@ -377,15 +421,21 @@ export default function BudgetsPage() {
           <div className="space-y-3">
             {budgets.map((b) => {
               const spent = transactions.filter(t => t.category_id === b.category_id).reduce((s, t) => s + Number(t.amount), 0)
-              const pct = Math.min((spent / Number(b.amount)) * 100, 100)
-              const over = spent > Number(b.amount)
+              const carry = rolloverFor(b.category_id)
+              const effective = Number(b.amount) + carry
+              const pct = Math.min((spent / effective) * 100, 100)
+              const over = spent > effective
+              const forecast = forecastFor(spent)
+              const forecastOver = isCurrentMonth && forecast > effective && !over
               return (
                 <div key={b.id} className="card p-5 group">
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
                       <span className="text-lg">{(b as any).categories?.icon}</span>
                       <span className="font-semibold text-surface-800">{(b as any).categories?.name}</span>
+                      {b.rollover_enabled && <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-bold" title="Sisa bulan lalu dibawa ke bulan ini">🔄 Rollover</span>}
                       {over && <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold">Over!</span>}
+                      {forecastOver && <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-bold">⚠️ Proyeksi lewat</span>}
                     </div>
                     <div className="flex items-center gap-1">
                       <button onClick={() => openEdit(b)} className="opacity-0 group-hover:opacity-100 w-7 h-7 rounded-lg hover:bg-brand-50 text-surface-400 hover:text-brand-600 flex items-center justify-center text-xs transition-all">✏️</button>
@@ -397,8 +447,16 @@ export default function BudgetsPage() {
                   </div>
                   <div className="flex justify-between text-xs">
                     <span className="text-surface-500">Terpakai: <span className="font-bold font-mono">{formatCurrency(spent)}</span></span>
-                    <span className="text-surface-400">Budget: <span className="font-bold font-mono">{formatCurrency(Number(b.amount))}</span></span>
+                    <span className="text-surface-400">
+                      Budget: <span className="font-bold font-mono">{formatCurrency(effective)}</span>
+                      {carry > 0 && <span className="text-blue-500"> (+{formatShort(carry)} sisa lalu)</span>}
+                    </span>
                   </div>
+                  {isCurrentMonth && (
+                    <p className={`text-[10px] mt-1.5 ${forecastOver ? 'text-amber-600 font-semibold' : 'text-surface-400'}`}>
+                      Proyeksi akhir bulan: {formatCurrency(forecast)}
+                    </p>
+                  )}
                 </div>
               )
             })}
@@ -427,6 +485,13 @@ export default function BudgetsPage() {
             <label className="label">Batas Anggaran</label>
             <input className="input" type="number" placeholder="0" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
           </div>
+          <label className="flex items-center gap-2 p-3 bg-surface-50 rounded-xl cursor-pointer">
+            <input type="checkbox" checked={form.rollover_enabled} onChange={(e) => setForm({ ...form, rollover_enabled: e.target.checked })} className="w-4 h-4" />
+            <div>
+              <p className="text-sm font-semibold text-surface-700">🔄 Rollover sisa budget</p>
+              <p className="text-[11px] text-surface-400">Sisa anggaran kategori ini akan dibawa ke bulan depan</p>
+            </div>
+          </label>
           <div className="flex gap-2">
             {editing && <button onClick={() => { deleteBudget(editing.id); setShowModal(false) }} className="btn btn-danger flex-1">Hapus</button>}
             <button onClick={saveBudget} className="btn btn-primary flex-1">{editing ? 'Simpan Perubahan' : 'Simpan'}</button>

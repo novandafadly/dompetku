@@ -18,6 +18,17 @@ export function formatShort(amount: number): string {
   return `${sign}Rp ${abs}`
 }
 
+export const CURRENCIES = ['IDR', 'USD', 'EUR', 'SGD', 'MYR', 'JPY', 'AUD', 'GBP', 'CNY', 'THB'] as const
+
+export function formatCurrencyIn(amount: number, currency: string = 'IDR'): string {
+  return new Intl.NumberFormat(currency === 'IDR' ? 'id-ID' : 'en-US', {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: currency === 'IDR' ? 0 : 2,
+  }).format(amount)
+}
+
 export function formatDate(date: string): string {
   return new Date(date).toLocaleDateString('id-ID', {
     day: 'numeric',

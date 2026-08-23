@@ -24,6 +24,9 @@ export type Wallet = {
   color: string | null
   is_active: boolean
   created_at: string
+  // Multi-currency — currency dompet ini & kurs ke mata uang basis (IDR)
+  currency: string
+  exchange_rate: number
 }
 
 export type Category = {
@@ -75,6 +78,7 @@ export type Budget = {
   amount: number
   period_month: number
   period_year: number
+  rollover_enabled: boolean
   categories?: Category
 }
 

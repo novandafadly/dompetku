@@ -3,16 +3,16 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import type { Wallet, Transfer, Pocket, SavingsGoal } from '@/lib/supabase'
-import { formatCurrency, formatDate, WALLET_ICONS, WALLET_COLORS, POCKET_META } from '@/lib/utils'
+import { formatCurrency, formatCurrencyIn, formatDate, WALLET_ICONS, WALLET_COLORS, POCKET_META, CURRENCIES } from '@/lib/utils'
 import AppShell from '@/components/AppShell'
 import Modal from '@/components/Modal'
 import { toast } from '@/components/Toast'
 
 type WalletType = 'cash' | 'bank' | 'ewallet' | 'investment'
-type WalletForm = { name: string; type: WalletType; pocket: Pocket; balance: string }
+type WalletForm = { name: string; type: WalletType; pocket: Pocket; balance: string; currency: string; exchange_rate: string }
 type TransferForm = { from_wallet_id: string; to_wallet_id: string; amount: string; note: string; date: string }
 
-const emptyWalletForm: WalletForm = { name: '', type: 'bank', pocket: 'operasional', balance: '' }
+const emptyWalletForm: WalletForm = { name: '', type: 'bank', pocket: 'operasional', balance: '', currency: 'IDR', exchange_rate: '1' }
 const emptyTForm: TransferForm = { from_wallet_id: '', to_wallet_id: '', amount: '', note: '', date: new Date().toISOString().split('T')[0] }
 
 export default function WalletsPage() {
@@ -44,7 +44,7 @@ export default function WalletsPage() {
   function openAddWallet() { setEditingWallet(null); setForm(emptyWalletForm); setShowWalletModal(true) }
   function openEditWallet(w: Wallet) {
     setEditingWallet(w)
-    setForm({ name: w.name, type: w.type as WalletType, pocket: (w.pocket || 'operasional') as Pocket, balance: String(w.balance) })
+    setForm({ name: w.name, type: w.type as WalletType, pocket: (w.pocket || 'operasional') as Pocket, balance: String(w.balance), currency: w.currency || 'IDR', exchange_rate: String(w.exchange_rate || 1) })
     setShowWalletModal(true)
   }
 
@@ -52,10 +52,13 @@ export default function WalletsPage() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
     if (!form.name) { toast('Nama dompet wajib diisi!', '⚠️'); return }
+    const exchangeRate = Number(form.exchange_rate) || 1
+    if (exchangeRate <= 0) { toast('Kurs harus lebih dari 0!', '⚠️'); return }
     const payload = {
       name: form.name, type: form.type, pocket: form.pocket,
       balance: Number(form.balance) || 0,
       icon: WALLET_ICONS[form.type], color: WALLET_COLORS[form.type],
+      currency: form.currency, exchange_rate: exchangeRate,
     }
     if (editingWallet) {
       // Update langsung — balance diset manual, tidak lewat trigger
@@ -135,19 +138,22 @@ export default function WalletsPage() {
   }
 
   // ── Derived data ──────────────────────────────────────────
+  // Konversi ke basis IDR pakai exchange_rate per dompet (default 1 utk dompet IDR)
+  const toBase = (w: Wallet) => Number(w.balance) * Number(w.exchange_rate || 1)
   const pocketTotals = (['operasional', 'tabungan', 'kantor'] as Pocket[]).map(p => ({
     pocket: p,
-    total: wallets.filter(w => w.pocket === p).reduce((s, w) => s + Number(w.balance), 0),
+    total: wallets.filter(w => w.pocket === p).reduce((s, w) => s + toBase(w), 0),
     wallets: wallets.filter(w => w.pocket === p),
   }))
-  const totalBalance = wallets.reduce((s, w) => s + Number(w.balance), 0)
+  const totalBalance = wallets.reduce((s, w) => s + toBase(w), 0)
+  const hasForeignCurrency = wallets.some(w => w.currency && w.currency !== 'IDR')
 
   return (
     <AppShell>
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-extrabold text-surface-900">Dompet & Saldo</h1>
-          <p className="text-sm text-surface-400">Total semua: {formatCurrency(totalBalance)}</p>
+          <p className="text-sm text-surface-400">Total semua: {hasForeignCurrency ? '≈ ' : ''}{formatCurrency(totalBalance)}</p>
         </div>
         <div className="flex gap-2">
           <button onClick={openAddTransfer} className="btn btn-secondary">⇄ Transfer</button>
@@ -209,8 +215,11 @@ export default function WalletsPage() {
                       </div>
                     </div>
                     <p className="text-sm font-semibold text-surface-800">{w.name}</p>
-                    <p className="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-2">{w.type}</p>
-                    <p className="text-xl font-extrabold font-mono text-surface-900">{formatCurrency(Number(w.balance))}</p>
+                    <p className="text-[10px] font-bold text-surface-400 uppercase tracking-wider mb-2">{w.type}{w.currency && w.currency !== 'IDR' ? ` · ${w.currency}` : ''}</p>
+                    <p className="text-xl font-extrabold font-mono text-surface-900">{formatCurrencyIn(Number(w.balance), w.currency || 'IDR')}</p>
+                    {w.currency && w.currency !== 'IDR' && (
+                      <p className="text-[10px] text-surface-400 mt-0.5">≈ {formatCurrency(toBase(w))} <span className="text-surface-300">(kurs {w.exchange_rate})</span></p>
+                    )}
                     {nearestGoal && goalPct !== null && (
                       <div className="mt-3 pt-3 border-t border-surface-100">
                         <div className="flex justify-between items-center mb-1">
@@ -316,11 +325,28 @@ export default function WalletsPage() {
               <option value="investment">📈 Investasi</option>
             </select>
           </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Mata Uang</label>
+              <select className="input" value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value, exchange_rate: e.target.value === 'IDR' ? '1' : form.exchange_rate })}>
+                {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            {form.currency !== 'IDR' && (
+              <div>
+                <label className="label">Kurs ke IDR</label>
+                <input className="input" type="number" placeholder="mis. 16000" value={form.exchange_rate} onChange={(e) => setForm({ ...form, exchange_rate: e.target.value })} />
+              </div>
+            )}
+          </div>
           <div>
             <label className="label">{editingWallet ? 'Saldo Saat Ini' : 'Saldo Awal'}</label>
             <input className="input" type="number" placeholder="0" value={form.balance} onChange={(e) => setForm({ ...form, balance: e.target.value })} />
             {editingWallet && (
               <p className="text-[11px] text-amber-600 mt-1">⚠️ Mengubah saldo langsung akan menimpa saldo saat ini tanpa mencatat transaksi.</p>
+            )}
+            {form.currency !== 'IDR' && form.exchange_rate && Number(form.balance) > 0 && (
+              <p className="text-[11px] text-surface-400 mt-1">≈ {formatCurrency(Number(form.balance) * (Number(form.exchange_rate) || 1))}</p>
             )}
           </div>
           <div className="flex gap-2">

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
-import type { Wallet, Transaction, Budget, Asset, Debt, RecurringTransaction, Pocket, NetWorthSnapshot } from '@/lib/supabase'
+import type { Wallet, Transaction, Budget, Asset, Debt, RecurringTransaction, Pocket, NetWorthSnapshot, CreditCard } from '@/lib/supabase'
 import { formatCurrency, formatShort, formatDate, MONTHS, POCKET_META } from '@/lib/utils'
 import AppShell from '@/components/AppShell'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, AreaChart, Area, XAxis, YAxis, CartesianGrid } from 'recharts'
@@ -12,6 +12,13 @@ const PIE_COLORS = ['#ef4444','#f97316','#eab308','#22c55e','#3b82f6','#8b5cf6',
 function daysUntil(dateStr: string): number {
   const today = new Date(); today.setHours(0,0,0,0)
   const due = new Date(dateStr); due.setHours(0,0,0,0)
+  return Math.ceil((due.getTime() - today.getTime()) / 86400000)
+}
+
+function daysUntilDayOfMonth(dayOfMonth: number): number {
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  let due = new Date(today.getFullYear(), today.getMonth(), dayOfMonth)
+  if (due < today) due = new Date(today.getFullYear(), today.getMonth() + 1, dayOfMonth)
   return Math.ceil((due.getTime() - today.getTime()) / 86400000)
 }
 
@@ -33,6 +40,7 @@ export default function DashboardPage() {
   const [debts, setDebts] = useState<Debt[]>([])
   const [recurring, setRecurring] = useState<RecurringTransaction[]>([])
   const [snapshots, setSnapshots] = useState<NetWorthSnapshot[]>([])
+  const [creditCards, setCreditCards] = useState<CreditCard[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => { loadAll() }, [])
@@ -42,7 +50,7 @@ export default function DashboardPage() {
     const startOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
     const sixMonthsAgo = new Date(); sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5); sixMonthsAgo.setDate(1)
 
-    const [w, t, b, a, d, r, s, c] = await Promise.all([
+    const [w, t, b, a, d, r, s, c, cc] = await Promise.all([
       supabase.from('wallets').select('*').eq('is_active', true),
       supabase.from('transactions').select('*').gte('date', startOfMonth).order('date', { ascending: false }),
       supabase.from('budgets').select('*').eq('period_month', now.getMonth() + 1).eq('period_year', now.getFullYear()),
@@ -51,6 +59,7 @@ export default function DashboardPage() {
       supabase.from('recurring_transactions').select('*').eq('is_active', true).order('next_due'),
       supabase.from('net_worth_snapshots').select('*').gte('snapshot_date', sixMonthsAgo.toISOString().split('T')[0]).order('snapshot_date'),
       supabase.from('categories').select('*'),
+      supabase.from('credit_cards').select('*'),
     ])
 
     // JS join — tidak pakai PostgREST embedded join
@@ -69,6 +78,7 @@ export default function DashboardPage() {
     setDebts(d.data || [])
     setRecurring(recurringJoined)
     setSnapshots(s.data || [])
+    setCreditCards(cc.data || [])
     setLoading(false)
 
     // Save today's snapshot
@@ -78,7 +88,7 @@ export default function DashboardPage() {
   async function saveSnapshot(w: Wallet[], a: Asset[], d: Debt[]) {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
-    const totalBalance = w.filter(x => x.pocket !== 'kantor').reduce((s, x) => s + Number(x.balance), 0)
+    const totalBalance = w.filter(x => x.pocket !== 'kantor').reduce((s, x) => s + Number(x.balance) * Number(x.exchange_rate || 1), 0)
     const totalAssets = a.reduce((s, x) => s + Number(x.value), 0)
     const totalDebt = d.filter(x => x.type === 'debt').reduce((s, x) => s + Number(x.total_amount) - Number(x.paid_amount), 0)
     const today = new Date().toISOString().split('T')[0]
@@ -93,11 +103,12 @@ export default function DashboardPage() {
 
   const pocketTotals = useMemo(() => (['operasional', 'tabungan', 'kantor'] as Pocket[]).map(p => ({
     pocket: p,
-    total: wallets.filter(w => w.pocket === p).reduce((s, w) => s + Number(w.balance), 0),
+    total: wallets.filter(w => w.pocket === p).reduce((s, w) => s + Number(w.balance) * Number(w.exchange_rate || 1), 0),
   })), [wallets])
 
   const operasionalTotal = pocketTotals.find(p => p.pocket === 'operasional')?.total || 0
-  const totalBalance = useMemo(() => wallets.filter(w => w.pocket !== 'kantor').reduce((s, w) => s + Number(w.balance), 0), [wallets])
+  const totalBalance = useMemo(() => wallets.filter(w => w.pocket !== 'kantor').reduce((s, w) => s + Number(w.balance) * Number(w.exchange_rate || 1), 0), [wallets])
+  const hasForeignCurrency = useMemo(() => wallets.some(w => w.currency && w.currency !== 'IDR'), [wallets])
   const totalAssets = useMemo(() => assets.reduce((s, a) => s + Number(a.value), 0), [assets])
   const totalDebt = useMemo(() => debts.filter(d => d.type === 'debt').reduce((s, d) => s + Number(d.total_amount) - Number(d.paid_amount), 0), [debts])
   const netWorth = totalBalance + totalAssets - totalDebt
@@ -118,7 +129,23 @@ export default function DashboardPage() {
     return Object.values(map).sort((a, b) => b.value - a.value)
   }, [personalTx])
 
-  const upcomingRecurring = recurring.filter(r => daysUntil(r.next_due) <= 7)
+  // ── Reminders — gabungan tagihan rutin, utang/piutang jatuh tempo, & tagihan kartu kredit ──
+  type Reminder = { key: string; icon: string; label: string; amount: number; days: number; tone: 'debt' | 'receivable' | 'bill' }
+  const reminders = useMemo<Reminder[]>(() => {
+    const items: Reminder[] = []
+    recurring.filter(r => r.is_active && daysUntil(r.next_due) <= 7).forEach(r => {
+      items.push({ key: `rec-${r.id}`, icon: r.categories?.icon || '💸', label: r.description || r.categories?.name || 'Tagihan rutin', amount: Number(r.amount), days: daysUntil(r.next_due), tone: 'bill' })
+    })
+    debts.filter(d => d.due_date && daysUntil(d.due_date) <= 7).forEach(d => {
+      const sisa = Number(d.total_amount) - Number(d.paid_amount)
+      items.push({ key: `debt-${d.id}`, icon: d.type === 'debt' ? '💳' : '🤝', label: `${d.type === 'debt' ? 'Bayar utang ke' : 'Tagih piutang dari'} ${d.person_name}`, amount: sisa, days: daysUntil(d.due_date!), tone: d.type === 'debt' ? 'debt' : 'receivable' })
+    })
+    creditCards.filter(c => c.due_date != null).forEach(c => {
+      const days = daysUntilDayOfMonth(c.due_date!)
+      if (days <= 7) items.push({ key: `cc-${c.id}`, icon: '💎', label: `Tagihan ${c.name}`, amount: Number(c.used_amount), days, tone: 'bill' })
+    })
+    return items.sort((a, b) => a.days - b.days)
+  }, [recurring, debts, creditCards])
 
   // Net worth chart data — combine snapshots + today
   const nwChartData = useMemo(() => {
@@ -150,24 +177,21 @@ export default function DashboardPage() {
         </div>
       ) : (
         <>
-          {/* Recurring alerts */}
-          {upcomingRecurring.length > 0 && (
+          {/* Perlu Diperhatikan — tagihan rutin, utang/piutang, kartu kredit jatuh tempo */}
+          {reminders.length > 0 && (
             <div className="card p-4 mb-6 border-l-4 border-l-amber-400 bg-amber-50/40">
-              <p className="text-sm font-bold text-amber-700 mb-2">🔔 {upcomingRecurring.length} tagihan rutin jatuh tempo dalam 7 hari</p>
+              <p className="text-sm font-bold text-amber-700 mb-2">🔔 {reminders.length} hal perlu diperhatikan dalam 7 hari</p>
               <div className="flex flex-wrap gap-2">
-                {upcomingRecurring.map(r => {
-                  const days = daysUntil(r.next_due)
-                  return (
-                    <div key={r.id} className="flex items-center gap-1.5 px-3 py-1.5 bg-white rounded-xl border border-amber-200 text-xs">
-                      <span>{r.categories?.icon || '💸'}</span>
-                      <span className="font-semibold text-surface-800">{r.description || r.categories?.name}</span>
-                      <span className="font-mono text-surface-500">{formatCurrency(Number(r.amount))}</span>
-                      <span className={`font-bold ${days < 0 ? 'text-red-600' : days === 0 ? 'text-orange-600' : 'text-amber-600'}`}>
-                        {days < 0 ? `${Math.abs(days)}h lalu` : days === 0 ? 'Hari ini' : `${days}h lagi`}
-                      </span>
-                    </div>
-                  )
-                })}
+                {reminders.map(r => (
+                  <div key={r.key} className={`flex items-center gap-1.5 px-3 py-1.5 bg-white rounded-xl border text-xs ${r.tone === 'debt' ? 'border-red-200' : r.tone === 'receivable' ? 'border-green-200' : 'border-amber-200'}`}>
+                    <span>{r.icon}</span>
+                    <span className="font-semibold text-surface-800">{r.label}</span>
+                    <span className="font-mono text-surface-500">{formatCurrency(r.amount)}</span>
+                    <span className={`font-bold ${r.days < 0 ? 'text-red-600' : r.days === 0 ? 'text-orange-600' : 'text-amber-600'}`}>
+                      {r.days < 0 ? `${Math.abs(r.days)}h lalu` : r.days === 0 ? 'Hari ini' : `${r.days}h lagi`}
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -186,7 +210,7 @@ export default function DashboardPage() {
                 )}
               </div>
               <div className="flex gap-4 text-xs text-surface-500">
-                <div><p className="text-[10px] uppercase font-bold text-surface-400 mb-0.5">Saldo</p><p className="font-mono font-semibold">{formatShort(totalBalance)}</p></div>
+                <div><p className="text-[10px] uppercase font-bold text-surface-400 mb-0.5">Saldo{hasForeignCurrency ? ' ≈' : ''}</p><p className="font-mono font-semibold">{formatShort(totalBalance)}</p></div>
                 <div><p className="text-[10px] uppercase font-bold text-surface-400 mb-0.5">Aset</p><p className="font-mono font-semibold">{formatShort(totalAssets)}</p></div>
                 <div><p className="text-[10px] uppercase font-bold text-red-400 mb-0.5">Utang</p><p className="font-mono font-semibold text-red-500">-{formatShort(totalDebt)}</p></div>
               </div>
