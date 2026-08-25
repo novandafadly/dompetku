@@ -144,9 +144,12 @@ export type Debt = {
   // Modal trading — piutang ke "diri sendiri" yang dipinjam dari pos tabungan
   is_capital_loan: boolean
   trading_wallet_id: string | null
+  // Sumber alternatif untuk capital loan kalau pos-nya berupa aset (mis. RDPU), bukan wallet
+  asset_id: string | null
   contacts?: Contact
   wallets?: Wallet
   trading_wallet?: Wallet
+  asset?: Asset
 }
 
 export type RecurringTransaction = {
