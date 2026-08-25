@@ -141,8 +141,12 @@ export type Debt = {
   description: string | null
   due_date: string | null
   is_completed: boolean
+  // Modal trading — piutang ke "diri sendiri" yang dipinjam dari pos tabungan
+  is_capital_loan: boolean
+  trading_wallet_id: string | null
   contacts?: Contact
   wallets?: Wallet
+  trading_wallet?: Wallet
 }
 
 export type RecurringTransaction = {

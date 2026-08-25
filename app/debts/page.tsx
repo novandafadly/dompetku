@@ -37,6 +37,8 @@ type DebtForm = {
   description: string
   due_date: string
   wallet_id: string
+  is_capital_loan: boolean
+  trading_wallet_id: string
 }
 
 type ContactForm = {
@@ -49,7 +51,7 @@ type ContactForm = {
 const emptyDebtForm: DebtForm = {
   contact_id: '', new_contact_name: '', type: 'debt',
   total_amount: '', paid_amount: '0', description: '', due_date: '',
-  wallet_id: '',
+  wallet_id: '', is_capital_loan: false, trading_wallet_id: '',
 }
 
 const emptyContactForm: ContactForm = {
@@ -102,7 +104,9 @@ export default function DebtsPage() {
 
   async function load() {
     const [d, c, w] = await Promise.all([
-      supabase.from('debts').select('*, contacts(*), wallets(*)').order('is_completed').order('due_date', { nullsFirst: false }),
+      supabase.from('debts')
+        .select('*, contacts(*), wallets!debts_wallet_id_fkey(*), trading_wallet:wallets!debts_trading_wallet_id_fkey(*)')
+        .order('is_completed').order('due_date', { nullsFirst: false }),
       supabase.from('contacts').select('*').order('name'),
       supabase.from('wallets').select('*').eq('is_active', true).order('name'),
     ])
@@ -176,6 +180,8 @@ export default function DebtsPage() {
       description: d.description || '',
       due_date: d.due_date || '',
       wallet_id: d.wallet_id || '',
+      is_capital_loan: d.is_capital_loan || false,
+      trading_wallet_id: d.trading_wallet_id || '',
     })
     setShowDebtModal(true)
   }
@@ -202,6 +208,7 @@ export default function DebtsPage() {
 
     if (!contactId && !debtForm.new_contact_name.trim()) { toast('Pilih atau isi nama orang!', '⚠️'); return }
 
+    const isCapitalLoan = debtForm.type === 'receivable' && debtForm.is_capital_loan
     const payload = {
       contact_id: contactId || null,
       person_name: personName,
@@ -211,6 +218,8 @@ export default function DebtsPage() {
       description: debtForm.description || null,
       due_date: debtForm.due_date || null,
       wallet_id: debtForm.wallet_id || null,
+      is_capital_loan: isCapitalLoan,
+      trading_wallet_id: isCapitalLoan ? (debtForm.trading_wallet_id || null) : null,
     }
 
     if (editingDebt) {
@@ -388,6 +397,20 @@ export default function DebtsPage() {
 
   const ungroupedDebts = debts.filter(d => !d.contact_id && !d.is_completed)
 
+  // ── Modal Trading — piutang yang dipinjam ke pos trading, dipisah dari utang/piutang biasa ──
+  const activeCapitalLoans = debts.filter(d => d.is_capital_loan && !d.is_completed)
+  const capitalLoanTotal = activeCapitalLoans.reduce((s, d) => s + Number(d.total_amount) - Number(d.paid_amount), 0)
+  const capitalByTradingWallet = useMemo(() => {
+    const map: Record<string, { wallet?: Wallet; owed: number; loans: Debt[] }> = {}
+    for (const d of activeCapitalLoans) {
+      const key = d.trading_wallet_id || '_unlinked'
+      if (!map[key]) map[key] = { wallet: d.trading_wallet, owed: 0, loans: [] }
+      map[key].owed += Number(d.total_amount) - Number(d.paid_amount)
+      map[key].loans.push(d)
+    }
+    return Object.values(map)
+  }, [activeCapitalLoans])
+
   const totalMyDebt = debts.filter(d => d.type === 'debt' && !d.is_completed)
     .reduce((s, d) => s + Number(d.total_amount) - Number(d.paid_amount), 0)
   const totalMyReceivable = debts.filter(d => d.type === 'receivable' && !d.is_completed)
@@ -422,6 +445,7 @@ export default function DebtsPage() {
               <span className={`text-xs font-bold px-2 py-0.5 rounded-lg ${d.type === 'debt' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
                 {d.type === 'debt' ? '↑ Hutang' : '↓ Piutang'}
               </span>
+              {d.is_capital_loan && <span className="badge bg-purple-100 text-purple-700 text-[10px]">💹 Modal Trading</span>}
               {isOverdue && <span className="badge bg-orange-100 text-orange-700 text-[10px]">Jatuh Tempo</span>}
               {d.wallets && (
                 <span className="text-[10px] bg-surface-100 text-surface-500 px-2 py-0.5 rounded-lg">
@@ -560,6 +584,48 @@ export default function DebtsPage() {
           </p>
         </div>
       </div>
+
+      {/* ── Modal Trading — dipisah dari utang/piutang orang ── */}
+      {activeCapitalLoans.length > 0 && (
+        <div className="card p-4 mb-4 border-2 border-purple-200 bg-purple-50/40">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-sm font-extrabold text-purple-800">💹 Modal Trading</p>
+            <p className="text-sm font-extrabold font-mono text-purple-700">{formatCurrency(capitalLoanTotal)}</p>
+          </div>
+          <p className="text-[10px] text-purple-500 mb-3">
+            Uang ini masih dihitung aman di progress tabungan kamu, tapi secara fisik sedang dipakai trading.
+          </p>
+          <div className="space-y-2">
+            {capitalByTradingWallet.map((g, i) => {
+              const balance = Number(g.wallet?.balance || 0)
+              const shortfall = g.owed - balance
+              const isShort = !!g.wallet && shortfall > 0
+              return (
+                <div key={i} className={`p-3 rounded-xl border ${isShort ? 'bg-red-50 border-red-200' : 'bg-white border-purple-100'}`}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-bold text-surface-700">
+                      {g.wallet ? `${g.wallet.icon || '💳'} ${g.wallet.name}` : '— Belum ditautkan ke wallet trading —'}
+                    </span>
+                    <span className="text-xs font-mono font-bold text-purple-700">Dipinjam: {formatShort(g.owed)}</span>
+                  </div>
+                  {g.wallet ? (
+                    <div className="flex items-center justify-between text-[10px]">
+                      <span className="text-surface-400">Saldo saat ini: <span className="font-semibold text-surface-600">{formatShort(balance)}</span></span>
+                      {isShort ? (
+                        <span className="font-bold text-red-600">⚠️ Kurang {formatShort(shortfall)}</span>
+                      ) : (
+                        <span className="font-bold text-green-600">✅ Aman</span>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-amber-600">Set wallet trading tujuan biar bisa dicek otomatis.</p>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Tab */}
       <div className="flex gap-2 mb-4">
@@ -844,6 +910,45 @@ export default function DebtsPage() {
               </p>
             )}
           </div>
+
+          {debtForm.type === 'receivable' && (
+            <div className="p-3 rounded-xl border border-purple-200 bg-purple-50">
+              <button
+                type="button"
+                onClick={() => setDebtForm(prev => ({
+                  ...prev,
+                  is_capital_loan: !prev.is_capital_loan,
+                  new_contact_name: !prev.is_capital_loan && !prev.contact_id && !prev.new_contact_name.trim()
+                    ? 'Modal Trading (Diri Sendiri)' : prev.new_contact_name,
+                }))}
+                className="w-full flex items-center gap-2.5 text-left"
+              >
+                <span className={`w-5 h-5 rounded-md border-2 flex items-center justify-center text-xs flex-shrink-0 transition-all ${debtForm.is_capital_loan ? 'bg-purple-600 border-purple-600 text-white' : 'border-purple-300 bg-white'}`}>
+                  {debtForm.is_capital_loan && '✓'}
+                </span>
+                <span className="flex-1">
+                  <span className="block text-sm font-bold text-purple-800">💹 Ini modal trading</span>
+                  <span className="block text-[10px] text-purple-500">Dipinjam dari pos tabungan/dana darurat — progress tabungan tidak akan turun, tapi kamu bisa pantau kalau modalnya lagi minus</span>
+                </span>
+              </button>
+
+              {debtForm.is_capital_loan && (
+                <div className="mt-3 pt-3 border-t border-purple-200">
+                  <label className="label">Wallet Trading Tujuan <span className="text-surface-400 font-normal">(mis. RDN)</span></label>
+                  <select className="input" value={debtForm.trading_wallet_id}
+                    onChange={e => setDebtForm({ ...debtForm, trading_wallet_id: e.target.value })}>
+                    <option value="">-- Pilih wallet trading --</option>
+                    {wallets.map(w => (
+                      <option key={w.id} value={w.id}>{w.icon || '💳'} {w.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-purple-500 mt-1">
+                    Dipakai untuk cek: kalau saldo wallet ini di bawah total modal yang dipinjam, kamu akan diberi peringatan di halaman Tujuan Tabungan.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
 
           <div>
             <label className="label">Sudah Dibayar</label>
