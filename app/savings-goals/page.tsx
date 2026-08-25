@@ -1,7 +1,7 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
-import type { Wallet } from '@/lib/supabase'
+import type { Wallet, Debt } from '@/lib/supabase'
 import { formatCurrency, formatShort, formatDate } from '@/lib/utils'
 import AppShell from '@/components/AppShell'
 import Modal from '@/components/Modal'
@@ -100,6 +100,7 @@ export default function SavingsGoalsPage() {
   const [goalWallets, setGoalWallets] = useState<Record<string, string[]>>({}) // goal_id -> wallet_id[]
   const [wallets, setWallets] = useState<Wallet[]>([])
   const [assets, setAssets] = useState<AssetLite[]>([])
+  const [capitalLoans, setCapitalLoans] = useState<Debt[]>([])
   const [goalHistories, setGoalHistories] = useState<Record<string, GoalHistory[]>>({})
   const [showModal, setShowModal] = useState(false)
   const [showTopUp, setShowTopUp] = useState(false)
@@ -118,14 +119,18 @@ export default function SavingsGoalsPage() {
   useEffect(() => { load() }, [])
 
   async function load() {
-    const [g, w, a, gw] = await Promise.all([
+    const [g, w, a, gw, dl] = await Promise.all([
       supabase.from('savings_goals').select('*').order('created_at', { ascending: false }),
       supabase.from('wallets').select('*').eq('is_active', true).order('name'),
       supabase.from('assets').select('id, name, type, value'),
       supabase.from('savings_goal_wallets').select('savings_goal_id, wallet_id'),
+      supabase.from('debts')
+        .select('*, trading_wallet:wallets!debts_trading_wallet_id_fkey(*)')
+        .eq('is_capital_loan', true).eq('is_completed', false),
     ])
     const walletList = w.data || []
     const assetList = (a.data as any) || []
+    setCapitalLoans((dl.data as any) || [])
     const goalList: SavingsGoal[] = ((g.data as any) || []).map((goal: SavingsGoal) => ({
       ...goal,
       assets: goal.asset_id ? assetList.find((a: AssetLite) => a.id === goal.asset_id) : undefined,
@@ -146,14 +151,58 @@ export default function SavingsGoalsPage() {
     await loadAllHistories(goalList, walletList)
   }
 
-  // Progress = jumlah saldo SEMUA wallet yang di-link, atau nilai asset
+  // Progress = jumlah saldo SEMUA wallet yang di-link, + modal trading yang lagi dipinjam (masih dihitung "aman")
   function currentAmountOf(goal: SavingsGoal): number {
     if (goal.asset_id) return Number(goal.assets?.value || 0)
     const linkedIds = goalWallets[goal.id] || (goal.wallet_id ? [goal.wallet_id] : [])
-    return linkedIds.reduce((sum, wid) => {
+    const walletTotal = linkedIds.reduce((sum, wid) => {
       const w = wallets.find(x => x.id === wid)
       return sum + Number(w?.balance || 0)
     }, 0)
+    return walletTotal + capitalLoanAmountOf(goal)
+  }
+
+  // Yang benar-benar bisa dicairkan sekarang (tidak termasuk bagian yang lagi dipinjam ke trading)
+  function withdrawableAmountOf(goal: SavingsGoal): number {
+    if (goal.asset_id) return Number(goal.assets?.value || 0)
+    const linkedIds = goalWallets[goal.id] || (goal.wallet_id ? [goal.wallet_id] : [])
+    return linkedIds.reduce((sum, wid) => sum + Number(wallets.find(x => x.id === wid)?.balance || 0), 0)
+  }
+
+  // Berapa yang lagi "dipinjam" ke pos trading dari wallet-wallet goal ini
+  function capitalLoanAmountOf(goal: SavingsGoal): number {
+    const linkedIds = goalWallets[goal.id] || (goal.wallet_id ? [goal.wallet_id] : [])
+    return capitalLoans
+      .filter(d => d.wallet_id && linkedIds.includes(d.wallet_id))
+      .reduce((s, d) => s + Number(d.total_amount) - Number(d.paid_amount), 0)
+  }
+
+  // Total modal trading (semua goal) dikelompokkan per wallet trading tujuan, untuk cek shortfall
+  const capitalByTradingWallet = useMemo(() => {
+    const map: Record<string, { wallet?: Wallet; owed: number }> = {}
+    for (const d of capitalLoans) {
+      const key = d.trading_wallet_id || '_unlinked'
+      if (!map[key]) map[key] = { wallet: d.trading_wallet, owed: 0 }
+      map[key].owed += Number(d.total_amount) - Number(d.paid_amount)
+    }
+    return map
+  }, [capitalLoans])
+
+  // Shortfall yang relevan buat goal ini: dari wallet trading tujuan loan-loan yang terhubung ke goal ini
+  function shortfallOf(goal: SavingsGoal): number {
+    const linkedIds = goalWallets[goal.id] || (goal.wallet_id ? [goal.wallet_id] : [])
+    const relevantWalletIds = new Set(
+      capitalLoans.filter(d => d.wallet_id && linkedIds.includes(d.wallet_id) && d.trading_wallet_id)
+        .map(d => d.trading_wallet_id as string)
+    )
+    let total = 0
+    relevantWalletIds.forEach(wid => {
+      const g = capitalByTradingWallet[wid]
+      if (!g?.wallet) return
+      const shortfall = g.owed - Number(g.wallet.balance || 0)
+      if (shortfall > 0) total += shortfall
+    })
+    return total
   }
 
   function linkedWalletsOf(goal: SavingsGoal): Wallet[] {
@@ -375,9 +424,9 @@ export default function SavingsGoalsPage() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session || !selectedGoal) return
     const amount = Number(withdrawForm.amount)
-    const maxAmount = currentAmountOf(selectedGoal)
+    const maxAmount = withdrawableAmountOf(selectedGoal)
     if (!amount || amount <= 0) { toast('Masukkan jumlah!', '⚠️'); return }
-    if (amount > maxAmount) { toast(`Maksimal pencairan ${formatCurrency(maxAmount)}!`, '⚠️'); return }
+    if (amount > maxAmount) { toast(`Maksimal pencairan ${formatCurrency(maxAmount)}! (bagian yang dipinjam ke trading belum bisa dicairkan)`, '⚠️'); return }
     if (!withdrawForm.to_wallet_id) { toast('Pilih dompet tujuan!', '⚠️'); return }
     if (!withdrawForm.date) { toast('Pilih tanggal!', '⚠️'); return }
 
@@ -535,6 +584,8 @@ export default function SavingsGoalsPage() {
     const history = goalHistories[goal.id] || []
     const isHistoryOpen = !!expandedHistory[goal.id]
     const linked = linkedWalletsOf(goal)
+    const onLoan = capitalLoanAmountOf(goal)
+    const shortfall = shortfallOf(goal)
 
     return (
       <div className="card p-4 group">
@@ -585,6 +636,20 @@ export default function SavingsGoalsPage() {
             </p>
           )}
         </div>
+
+        {/* Modal trading breakdown + shortfall warning */}
+        {onLoan > 0 && (
+          <div className="mb-3 p-2.5 rounded-xl bg-purple-50 border border-purple-100 text-[10px]">
+            <p className="text-purple-700">
+              💹 <span className="font-bold">{formatShort(onLoan)}</span> dari saldo di atas sedang dipinjam ke modal trading
+            </p>
+            {shortfall > 0 && (
+              <p className="text-red-600 font-bold mt-1">
+                ⚠️ Modal trading lagi minus {formatShort(shortfall)} dari yang seharusnya — dana ini belum sepenuhnya aman kalau dicairkan sekarang
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Actions */}
         {!goal.is_completed ? (
@@ -939,7 +1004,8 @@ export default function SavingsGoalsPage() {
       {/* ── Withdraw Modal ── */}
       <Modal open={showWithdraw && !!selectedGoal} onClose={() => setShowWithdraw(false)} title={`💸 Cairkan — ${selectedGoal?.name}`}>
         {selectedGoal && (() => {
-          const current = currentAmountOf(selectedGoal)
+          const current = withdrawableAmountOf(selectedGoal)
+          const onLoan = capitalLoanAmountOf(selectedGoal)
           const linked = linkedWalletsOf(selectedGoal)
           const targetWallets = wallets.filter(w => !linked.some(l => l.id === w.id))
           const withdrawAmt = Number(withdrawForm.amount)
@@ -948,6 +1014,11 @@ export default function SavingsGoalsPage() {
               <div className="p-3 rounded-xl bg-orange-50 border border-orange-100">
                 <p className="text-xs text-surface-500 mb-0.5">Saldo terkumpul (maks. pencairan)</p>
                 <p className="text-xl font-extrabold font-mono text-orange-600">{formatCurrency(current)}</p>
+                {onLoan > 0 && (
+                  <p className="text-[10px] text-purple-600 mt-1">
+                    💹 {formatCurrency(onLoan)} lainnya masih dipinjam ke modal trading, belum bisa dicairkan
+                  </p>
+                )}
               </div>
               <div>
                 <label className="label">Tanggal</label>
