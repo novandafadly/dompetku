@@ -10,10 +10,10 @@ import { toast } from '@/components/Toast'
 
 type WalletType = 'cash' | 'bank' | 'ewallet' | 'investment'
 type WalletForm = { name: string; type: WalletType; pocket: Pocket; balance: string }
-type TransferForm = { from_wallet_id: string; to_wallet_id: string; amount: string; note: string; date: string }
+type TransferForm = { from_wallet_id: string; to_wallet_id: string; amount: string; fee: string; note: string; date: string }
 
 const emptyWalletForm: WalletForm = { name: '', type: 'bank', pocket: 'operasional', balance: '' }
-const emptyTForm: TransferForm = { from_wallet_id: '', to_wallet_id: '', amount: '', note: '', date: new Date().toISOString().split('T')[0] }
+const emptyTForm: TransferForm = { from_wallet_id: '', to_wallet_id: '', amount: '', fee: '0', note: '', date: new Date().toISOString().split('T')[0] }
 
 export default function WalletsPage() {
   const router = useRouter()
@@ -84,7 +84,7 @@ export default function WalletsPage() {
   function openAddTransfer() { setEditingTransfer(null); setTForm(emptyTForm); setShowTransferModal(true) }
   function openEditTransfer(t: Transfer) {
     setEditingTransfer(t)
-    setTForm({ from_wallet_id: t.from_wallet_id, to_wallet_id: t.to_wallet_id, amount: String(t.amount), note: t.note || '', date: t.date })
+    setTForm({ from_wallet_id: t.from_wallet_id, to_wallet_id: t.to_wallet_id, amount: String(t.amount), fee: String((t as any).fee || 0), note: t.note || '', date: t.date })
     setShowTransferModal(true)
   }
 
@@ -93,6 +93,7 @@ export default function WalletsPage() {
     if (!session) return
     if (tForm.from_wallet_id === tForm.to_wallet_id) { toast('Pilih dompet berbeda!', '⚠️'); return }
     const amount = Number(tForm.amount)
+    const fee = Number(tForm.fee) || 0
     if (!amount || amount <= 0) { toast('Jumlah tidak valid!', '⚠️'); return }
 
     if (editingTransfer) {
@@ -106,7 +107,9 @@ export default function WalletsPage() {
         from_wallet_id: tForm.from_wallet_id,
         to_wallet_id: tForm.to_wallet_id,
         amount,
+        fee: fee || null,
         note: tForm.note || null,
+        description: tForm.note || null,
         date: tForm.date,
       })
       if (insError) { toast(insError.message, '❌'); return }
@@ -118,7 +121,9 @@ export default function WalletsPage() {
         from_wallet_id: tForm.from_wallet_id,
         to_wallet_id: tForm.to_wallet_id,
         amount,
+        fee: fee || null,
         note: tForm.note || null,
+        description: tForm.note || null,
         date: tForm.date,
       })
       if (error) { toast(error.message, '❌'); return }
@@ -269,7 +274,10 @@ export default function WalletsPage() {
                   <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center text-lg flex-shrink-0">⇄</div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-surface-800">{from?.name || '?'} → {to?.name || '?'}</p>
-                    <p className="text-[10px] text-surface-400">{formatDate(t.date)}{t.note ? ` · ${t.note}` : ''}</p>
+                    <p className="text-[10px] text-surface-400">
+                      {formatDate(t.date)}{t.note ? ` · ${t.note}` : ''}
+                      {Number((t as any).fee) > 0 && <span className="text-amber-600 font-semibold"> · Biaya: {formatCurrency(Number((t as any).fee))}</span>}
+                    </p>
                   </div>
                   <p className="text-sm font-bold font-mono text-blue-600 flex-shrink-0">{formatCurrency(Number(t.amount))}</p>
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-1">
@@ -356,6 +364,15 @@ export default function WalletsPage() {
           <div>
             <label className="label">Jumlah</label>
             <input className="input" type="number" placeholder="0" value={tForm.amount} onChange={(e) => setTForm({ ...tForm, amount: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">Biaya Transfer <span className="text-surface-400 font-normal">(opsional)</span></label>
+            <input className="input" type="number" placeholder="0" value={tForm.fee} onChange={(e) => setTForm({ ...tForm, fee: e.target.value })} />
+            {Number(tForm.fee) > 0 && (
+              <p className="text-[10px] text-amber-600 mt-1 font-semibold">
+                ⚠️ Total keluar dari dompet asal: {formatCurrency(Number(tForm.amount || 0) + Number(tForm.fee))}
+              </p>
+            )}
           </div>
           <div>
             <label className="label">Tanggal</label>
