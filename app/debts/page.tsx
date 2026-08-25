@@ -70,20 +70,14 @@ type ContactSummary = {
   net: number
 }
 
-// ─── Helper: reverse semua transaksi debt ─────────────────
-// DELETE transaksi saja — trigger update_wallet_balance_on_transaction
-// (SECURITY DEFINER) auto-reverse balance via DELETE handler
-async function reverseDebtTransactions(debtId: string) {
-  await supabase.from('transactions').delete().eq('debt_id', debtId)
-}
-
-// ─── Helper: adjust an asset's value directly — for capital loans sourced ───
-// from an asset (mis. RDPU) rather than a wallet, since the transactions
-// table only tracks wallet balances.
-async function applyAssetDelta(assetId: string, delta: number) {
-  const { data: asset } = await supabase.from('assets').select('value').eq('id', assetId).single()
-  if (!asset) return
-  await supabase.from('assets').update({ value: Math.max(0, Number(asset.value) + delta) }).eq('id', assetId)
+// ─── Helper: reverse semua efek (transaksi + transfer) dari sebuah debt ───
+// DELETE saja — trigger update_wallet_balance_on_transaction /
+// update_wallet_balance_on_transfer (SECURITY DEFINER) auto-reverse balance
+async function reverseDebtEffects(debtId: string) {
+  await Promise.all([
+    supabase.from('transactions').delete().eq('debt_id', debtId),
+    supabase.from('transfers').delete().eq('debt_id', debtId),
+  ])
 }
 
 export default function DebtsPage() {
@@ -227,6 +221,13 @@ export default function DebtsPage() {
 
     const isCapitalLoan = debtForm.type === 'receivable' && debtForm.is_capital_loan
     const isAssetSourced = isCapitalLoan && debtForm.capital_source === 'asset'
+
+    if (isCapitalLoan) {
+      if (!debtForm.trading_wallet_id) { toast('Pilih wallet trading tujuan!', '⚠️'); return }
+      if (isAssetSourced && !debtForm.asset_id) { toast('Pilih aset sumbernya!', '⚠️'); return }
+      if (!isAssetSourced && !debtForm.wallet_id) { toast('Pilih wallet sumbernya!', '⚠️'); return }
+    }
+
     const payload = {
       contact_id: contactId || null,
       person_name: personName,
@@ -241,23 +242,36 @@ export default function DebtsPage() {
       asset_id: isAssetSourced ? (debtForm.asset_id || null) : null,
     }
 
+    // Modal trading dicatat lewat Transfer (bukan Transaction) supaya perpindahan
+    // dana ini TIDAK ikut kehitung sebagai income/expense di laporan — ini
+    // realokasi internal, bukan pemasukan/pengeluaran baru.
+    const capitalNote = `Modal Trading: ${personName}${debtForm.description ? ' - ' + debtForm.description : ''}`
+    async function insertCapitalTransfer(debtId: string) {
+      await supabase.from('transfers').insert({
+        user_id: session!.user.id,
+        from_wallet_id: isAssetSourced ? null : debtForm.wallet_id,
+        from_asset_id: isAssetSourced ? debtForm.asset_id : null,
+        to_wallet_id: debtForm.trading_wallet_id,
+        amount: total,
+        fee: 0,
+        note: capitalNote,
+        description: capitalNote,
+        debt_id: debtId,
+      })
+    }
+
     if (editingDebt) {
       // ── EDIT MODE ──
-      // 1. Reverse efek lama: transaksi wallet lama (trigger auto-reverse balance),
-      //    atau kalau sumbernya aset, kembalikan nilai aset yang masih ke-outstanding
-      await reverseDebtTransactions(editingDebt.id)
-      if (editingDebt.asset_id) {
-        const outstanding = Number(editingDebt.total_amount) - Number(editingDebt.paid_amount)
-        await applyAssetDelta(editingDebt.asset_id, outstanding)
-      }
+      // 1. Reverse efek lama (transaksi ATAU transfer, trigger auto-reverse balance)
+      await reverseDebtEffects(editingDebt.id)
 
       // 2. Update data debt
       const { error } = await supabase.from('debts').update(payload).eq('id', editingDebt.id)
       if (error) { toast(error.message, '❌'); return }
 
       // 3. Terapkan efek baru
-      if (isAssetSourced && debtForm.asset_id) {
-        await applyAssetDelta(debtForm.asset_id, -total)
+      if (isCapitalLoan) {
+        await insertCapitalTransfer(editingDebt.id)
       } else if (debtForm.wallet_id) {
         // Insert transaksi baru — trigger otomatis update balance
         await supabase.from('transactions').insert({
@@ -284,8 +298,8 @@ export default function DebtsPage() {
         .single()
       if (error) { toast(error.message, '❌'); return }
 
-      if (isAssetSourced && debtForm.asset_id && newDebt) {
-        await applyAssetDelta(debtForm.asset_id, -total)
+      if (isCapitalLoan && newDebt) {
+        await insertCapitalTransfer(newDebt.id)
       } else if (debtForm.wallet_id && newDebt) {
         // Insert transaksi — trigger otomatis update balance
         await supabase.from('transactions').insert({
@@ -311,14 +325,8 @@ export default function DebtsPage() {
     e?.stopPropagation()
     if (!confirm('Hapus catatan ini?')) return
 
-    const d = debts.find(x => x.id === id)
-    // Reverse semua transaksi terkait — trigger auto-reverse balance
-    await reverseDebtTransactions(id)
-    // Kalau sumbernya aset, kembalikan nilai aset yang masih ke-outstanding
-    if (d?.asset_id) {
-      const outstanding = Number(d.total_amount) - Number(d.paid_amount)
-      await applyAssetDelta(d.asset_id, outstanding)
-    }
+    // Reverse semua efek terkait (transaksi/transfer) — trigger auto-reverse balance
+    await reverseDebtEffects(id)
 
     await supabase.from('debts').delete().eq('id', id)
     toast('Dihapus', '🗑️'); load()
@@ -353,9 +361,20 @@ export default function DebtsPage() {
     const isCompleted = newPaid >= Number(payingDebt.total_amount)
     await supabase.from('debts').update({ paid_amount: newPaid, is_completed: isCompleted }).eq('id', payingDebt.id)
 
-    if (payingDebt.asset_id) {
-      // Capital loan bersumber dari aset — uang balik ke aset itu langsung, bukan wallet
-      await applyAssetDelta(payingDebt.asset_id, amount)
+    if (payingDebt.is_capital_loan && payingDebt.trading_wallet_id) {
+      // Modal trading dibayar balik — transfer dari wallet trading ke pos asalnya
+      // (wallet atau aset), bukan Transaction, biar nggak ikut kehitung income/expense
+      await supabase.from('transfers').insert({
+        user_id: session.user.id,
+        from_wallet_id: payingDebt.trading_wallet_id,
+        to_wallet_id: payingDebt.asset_id ? null : payingDebt.wallet_id,
+        to_asset_id: payingDebt.asset_id || null,
+        amount,
+        fee: 0,
+        note: `Pengembalian Modal Trading: ${payingDebt.person_name}`,
+        description: `Pengembalian Modal Trading: ${payingDebt.person_name}`,
+        debt_id: payingDebt.id,
+      })
     } else if (payWalletId) {
       // Insert transaksi bayar — trigger otomatis update balance
       await supabase.from('transactions').insert({
@@ -1006,7 +1025,7 @@ export default function DebtsPage() {
                     </div>
                   )}
 
-                  <label className="label">Wallet Trading Tujuan <span className="text-surface-400 font-normal">(mis. RDN)</span></label>
+                  <label className="label">Wallet Trading Tujuan <span className="text-red-400 font-normal">(wajib)</span></label>
                   <select className="input" value={debtForm.trading_wallet_id}
                     onChange={e => setDebtForm({ ...debtForm, trading_wallet_id: e.target.value })}>
                     <option value="">-- Pilih wallet trading --</option>
@@ -1015,7 +1034,7 @@ export default function DebtsPage() {
                     ))}
                   </select>
                   <p className="text-[10px] text-purple-500 mt-1">
-                    Dipakai untuk cek: kalau saldo wallet ini di bawah total modal yang dipinjam, kamu akan diberi peringatan di halaman Tujuan Tabungan.
+                    Dananya beneran dipindah ke sini lewat Transfer (bukan Transaction), jadi saldo wallet ini langsung nambah tapi TIDAK ikut kehitung sebagai income di laporan kamu.
                   </p>
                 </div>
               )}
@@ -1119,9 +1138,9 @@ export default function DebtsPage() {
               })}
             </div>
 
-            {payingDebt.asset_id ? (
+            {payingDebt.is_capital_loan ? (
               <div className="p-3 rounded-xl bg-purple-50 border border-purple-100 text-[10px] text-purple-600 font-semibold">
-                📈 Akan menambah nilai aset "{payingDebt.asset?.name || '—'}" sejumlah pembayaran ini.
+                📈 Akan ditransfer balik dari "{payingDebt.trading_wallet?.name || 'wallet trading'}" ke {payingDebt.asset_id ? `aset "${payingDebt.asset?.name || '—'}"` : `wallet "${payingDebt.wallets?.name || '—'}"`} — tidak ikut kehitung income/expense.
               </div>
             ) : (
               <div>
