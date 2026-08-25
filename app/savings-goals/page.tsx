@@ -151,9 +151,9 @@ export default function SavingsGoalsPage() {
     await loadAllHistories(goalList, walletList)
   }
 
-  // Progress = jumlah saldo SEMUA wallet yang di-link, + modal trading yang lagi dipinjam (masih dihitung "aman")
+  // Progress = saldo wallet/aset yang di-link, + modal trading yang lagi dipinjam (masih dihitung "aman")
   function currentAmountOf(goal: SavingsGoal): number {
-    if (goal.asset_id) return Number(goal.assets?.value || 0)
+    if (goal.asset_id) return Number(goal.assets?.value || 0) + capitalLoanAmountOf(goal)
     const linkedIds = goalWallets[goal.id] || (goal.wallet_id ? [goal.wallet_id] : [])
     const walletTotal = linkedIds.reduce((sum, wid) => {
       const w = wallets.find(x => x.id === wid)
@@ -169,8 +169,13 @@ export default function SavingsGoalsPage() {
     return linkedIds.reduce((sum, wid) => sum + Number(wallets.find(x => x.id === wid)?.balance || 0), 0)
   }
 
-  // Berapa yang lagi "dipinjam" ke pos trading dari wallet-wallet goal ini
+  // Berapa yang lagi "dipinjam" ke pos trading dari wallet-wallet/aset goal ini
   function capitalLoanAmountOf(goal: SavingsGoal): number {
+    if (goal.asset_id) {
+      return capitalLoans
+        .filter(d => d.asset_id === goal.asset_id)
+        .reduce((s, d) => s + Number(d.total_amount) - Number(d.paid_amount), 0)
+    }
     const linkedIds = goalWallets[goal.id] || (goal.wallet_id ? [goal.wallet_id] : [])
     return capitalLoans
       .filter(d => d.wallet_id && linkedIds.includes(d.wallet_id))
@@ -192,8 +197,9 @@ export default function SavingsGoalsPage() {
   function shortfallOf(goal: SavingsGoal): number {
     const linkedIds = goalWallets[goal.id] || (goal.wallet_id ? [goal.wallet_id] : [])
     const relevantWalletIds = new Set(
-      capitalLoans.filter(d => d.wallet_id && linkedIds.includes(d.wallet_id) && d.trading_wallet_id)
-        .map(d => d.trading_wallet_id as string)
+      capitalLoans.filter(d => d.trading_wallet_id && (
+        goal.asset_id ? d.asset_id === goal.asset_id : (d.wallet_id && linkedIds.includes(d.wallet_id))
+      )).map(d => d.trading_wallet_id as string)
     )
     let total = 0
     relevantWalletIds.forEach(wid => {
