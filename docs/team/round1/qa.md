@@ -157,8 +157,8 @@ v1 gagal bukan karena tidak ada fitur, tetapi karena tidak ada satu pun bukti ot
 | ID | Tes | Kapan |
 |---|---|---|
 | BR1 | Di CI: Postgres + WAL-G → **MinIO** (container, pengganti OCI Object Storage) untuk base backup, tulis baris penanda, `wal-g backup-fetch` + PITR ke container baru, lalu jalankan pgTAP rekonsiliasi (T18) + hitung baris per tabel = sumber | PR yang menyentuh `infra/backup/**` + nightly |
-| BR2 | PITR: penanda ditulis pada t0, t0+1m, t0+2m; restore ke t0+1m30s | Hanya penanda 1–2 ada (bukti RPO) | nightly |
-| BR3 | Restore dengan kunci enkripsi salah | Gagal dengan jelas (bukti backup benar-benar terenkripsi) | nightly |
+| BR2 | PITR: penanda ditulis pada t0, t0+1m, t0+2m; restore ke t0+1m30s, lalu hanya penanda 1–2 yang ada (bukti RPO) | nightly |
+| BR3 | Restore dengan kunci enkripsi salah harus gagal dengan jelas (bukti backup benar-benar terenkripsi) | nightly |
 | BR4 | Job produksi `backup_verify` mingguan (SPEC §5.5): restore ke container sementara di VM DB → pgTAP rekonsiliasi → hasil ke `job_runs` + alert bila gagal | mingguan, status jadi gate rilis |
 | BR5 | Drill manual per kuartal + sebelum go-live: pemilik/DevOps memulihkan dari nol ke VM kosong mengikuti runbook, dicatat dengan durasi | RTO ≤ 1 jam dibuktikan dengan stopwatch, bukan asumsi |
 | BR6 | Migrasi: (a) dari kosong ke HEAD; (b) **upgrade**: DB berisi fixture rilis sebelumnya (dump tag N-1) → migrasi HEAD → seluruh pgTAP + rekonsiliasi; (c) **kompatibilitas N-1**: tes integrasi versi app N-1 dijalankan terhadap skema HEAD (menjamin rollback image aman, SPEC §5.7 expand/contract) | (a) PR; (b)(c) PR yang menyentuh `migrations/**` mulai M1 |
