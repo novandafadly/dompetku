@@ -1,0 +1,150 @@
+# DompetKu v2 — Desain (revisi 2: self-hosted, ruang bersama)
+
+Tanggal: 2026-10-29 · Status: menunggu persetujuan pemilik · Menggantikan bagian stack/auth/deploy di `docs/v2/DESIGN.md` revisi 1.
+Detail domain uang (jurnal, fungsi, invarian, migrasi) tetap di `docs/v2/DESIGN.md`; UX di `docs/v2/UX.md`; milestone di `docs/v2/ROADMAP.md`.
+Dasar temuan: `docs/audit/SUMMARY.md`.
+
+## 1. Maksud
+
+DompetKu v2 adalah aplikasi keuangan pribadi untuk **dua orang (pemilik dan pasangan) yang dipakai setiap hari**, dibangun ulang dari nol
+karena v1 terbukti bisa salah menghitung uang dan kehilangan data (audit INT-01..04).
+Yang membuatnya berhasil: angka selalu benar dan bisa dijelaskan, mencatat cepat (≤ 3 ketukan), tidak pernah kehilangan data, aman setara aplikasi finansial,
+dan tampil rapi sehingga screenshot-nya layak jadi portofolio.
+
+## 2. Tujuan, non-tujuan, anti-tujuan
+
+**Tujuan**
+- Semua aturan bisnis v1 yang bernilai bertahan (01-features §2) dengan perilaku teruji.
+- Ruang **Pribadi** per orang + satu ruang **Bersama** per rumah tangga.
+- Self-hosted di 2 VM OCI milik pemilik, domain `novandafadly.com`.
+- Kualitas "enterprise": logika uang di DB, atomik, idempoten, teraudit; RLS teruji dua user; backup + restore teruji; CI wajib hijau; observabilitas.
+- Mencatat semudah mengetik ("makan siang 35rb bca") dengan saran kategori otomatis.
+
+**Non-tujuan**
+- Bukan SaaS publik; tidak ada pendaftaran terbuka, billing, atau trial.
+- Repo tetap **private**; tidak ada mode demo publik. Portofolio = screenshot dari data demo.
+- Tidak multi-mata-uang, tidak berbagi selain satu ruang Bersama, tidak impor mutasi bank di MVP.
+
+**Anti-tujuan** (gagal walau "jalan")
+- Saldo yang bisa melenceng dari riwayatnya, atau edit yang bisa kehilangan data.
+- Data pribadi pasangan bisa terlihat lewat jalur apa pun (laporan, ekspor, AI, log).
+- Database terbuka ke internet.
+- Mengganggu app lain di VM yang sama (insiden `:5435` di riwayat ops).
+- UI generik/"AI slop", kontras gagal AA, aksi tersembunyi di hover.
+
+## 3. Batasan
+
+- **VM App** `rtp-prod-app-01` (IP publik): per 2026-09-10 1 vCPU, 5,8 GiB RAM, swap 2 GiB terpakai, disk 78%, menjalankan app lain + Prometheus/Grafana. Kapasitas harus dicek ulang dan dibereskan sebelum deploy (M0).
+- **VM DB** `rtp-prod-db-01` (`10.0.1.68`, privat): 3 vCPU, 17 GiB RAM, idle; sudah ada Postgres app lain (`:5435`, `:5436`) dan Redis via Docker Compose.
+- Arsitektur CPU kedua VM belum diketahui (Ampere ARM atau x86) → image dibangun multi-arch.
+- Sesi Claude di cloud tidak bisa SSH ke VM; deploy lewat GitHub Actions atau dijalankan pemilik.
+- v1 dan project Supabase v1 read-only sampai cutover.
+
+## 4. Pendekatan yang dipertimbangkan
+
+### 4.1 Backend/hosting — dipilih **B**
+| | Pendekatan | Trade-off |
+|---|---|---|
+| A | Supabase self-host di VM DB + Next.js di VM App | Plan rev 1 hampir utuh; tetapi 6–8 container untuk dirawat dan API DB terekspos publik |
+| **B** | **Postgres 17 polos di VM DB + Next.js (auth sendiri) di VM App; DB hanya diakses server** | Paling ringan & permukaan serangan terkecil; auth, job, admin ditulis sendiri |
+| C | Supabase cloud Pro + Next.js di VM | Ops paling sedikit; biaya ±$25/bln, data tidak di server sendiri |
+Alasan B: VM App sempit; logika uang memang di Postgres sehingga Supabase hampir tidak menambah nilai; DB tidak terekspos.
+
+### 4.2 Urutan kerja — dipilih **C (irisan vertikal)**
+| | Pendekatan | Trade-off |
+|---|---|---|
+| A | Backend semua dulu, UI terakhir | Inti kokoh; lama tanpa app, celah model data ketahuan terlambat |
+| B | UI dulu dengan data palsu | Cepat terasa; logika uang mengikuti bentuk UI (pola v1) |
+| **C** | **M0 fondasi + design system + prototipe klik; lalu tiap fitur: skema+fungsi+tes → UI → dipakai** | Tiap milestone bisa dipakai; uang selalu test-first |
+
+### 4.3 Akses — **domain publik** `dompet.novandafadly.com` (dipilih pemilik), bukan VPN.
+
+### 4.4 Model berbagi — **ruang terpisah** (dipilih pemilik): pengeluaran dompet bersama hanya di tampilan Bersama dengan anggaran sendiri.
+
+## 5. Arsitektur yang diputuskan
+
+```
+ Browser/PWA ──HTTPS──▶ [VM App] reverse proxy (TLS, rate limit, header)
+                               │
+                               ├─▶ web: Next.js (standalone, Node)  ──┐
+                               └─▶ worker: job terjadwal (Node)    ───┤  TLS, jaringan privat VCN
+                                                                     ▼
+                                                     [VM DB] postgres-dompetku (container sendiri)
+                                                                     │
+                                                     WAL-G ──▶ OCI Object Storage (terenkripsi)
+```
+
+### 5.1 Aplikasi
+- Next.js App Router (versi stabil terbaru saat M0) + React + TypeScript strict; RSC untuk baca, Server Actions untuk tulis.
+- Akses DB **hanya dari server** memakai Kysely (query builder bertipe, SQL-first) di atas driver `pg`/`postgres`; tipe di-generate dari skema (kysely-codegen) di CI.
+- Setiap request terautentikasi berjalan dalam transaksi `withUser(userId, spaceId?)` yang menjalankan `select set_config('app.user_id', $1, true)` sebelum query apa pun. RLS membaca `current_setting('app.user_id')` lewat fungsi `app.current_user_id()`.
+- Fungsi uang = fungsi Postgres di skema `api` (lihat `docs/v2/DESIGN.md` §5), dipanggil `select api.create_entry(...)`. Semua aturan revisi 1 tetap: jurnal `entries`/`entry_lines`, saldo turunan, idempotensi `client_id`, `version`, soft delete, `entry_history`, FK komposit.
+- Validasi Zod di batas input; error DB berkode dipetakan ke pesan Indonesia.
+- UI: Tailwind + Radix (pola shadcn), lucide, token desain `docs/v2/UX.md` §5; dark mode; PWA.
+
+### 5.2 Peran database
+| Role | Hak | Dipakai oleh |
+|---|---|---|
+| `dompetku_owner` | pemilik skema, DDL | migrasi (CI/deploy) saja |
+| `dompetku_app` | `USAGE` skema; `SELECT` tabel dengan RLS; `EXECUTE` fungsi `api.*`; R/W tabel auth; **tanpa** INSERT/UPDATE/DELETE langsung ke tabel ledger; `NOBYPASSRLS` | web + worker |
+| `dompetku_readonly` | `SELECT` saja | backup verifikasi, debugging darurat |
+`FORCE ROW LEVEL SECURITY` di semua tabel domain. Fungsi `api.*` `SECURITY DEFINER` dengan `search_path = ''`, memeriksa `app.current_user_id()` dan keanggotaan ruang.
+
+### 5.3 Auth
+- Better Auth (self-hosted library, tabel di skema `auth` Postgres): email + password (argon2/scrypt sesuai library), **passkey** dan **TOTP 2FA** (wajib untuk kedua akun setelah onboarding), sesi di DB dengan cookie `HttpOnly; Secure; SameSite=Lax`, rotasi sesi, daftar perangkat aktif + cabut sesi.
+- Pendaftaran tertutup: allowlist email dari env `AUTH_ALLOWED_EMAILS`; pasangan diundang lewat tautan undangan sekali pakai dari akun pemilik.
+- Rate limit login & reset password (per IP + per akun), lockout bertahap, email reset lewat penyedia SMTP transaksional (Resend sudah pernah dipakai pemilik — keputusan builder, lihat §8).
+- Middleware hanya menyegarkan sesi & redirect UX; otorisasi selalu di server (`requireUser()`) + RLS.
+
+### 5.4 Ruang (Pribadi & Bersama)
+- Tabel `households` (1 baris), `spaces (id, household_id, kind personal|shared, owner_user_id null untuk shared)`, `space_members (space_id, user_id, role)`.
+- Setiap tabel domain punya `space_id` (FK komposit), menggantikan `user_id` sebagai batas kepemilikan; `created_by`/`updated_by` = user. RLS: baris terlihat bila `app.current_user_id()` anggota `space_id`-nya. Ruang Pribadi hanya beranggota pemiliknya.
+- Kategori, anggaran, tujuan, tagihan rutin, laporan: per ruang. Ruang Bersama di-seed kategori rumah tangga.
+- Transfer lintas ruang (dompet pribadi → dompet Bersama) = satu entri `transfer` dengan dua line di ruang berbeda; di laporan pribadi tampil "Setor ke Bersama" (bukan pengeluaran), di Bersama "Setoran dari <nama>" (bukan pemasukan). Fungsi transfer memvalidasi user anggota kedua ruang.
+- Utang/piutang, modal trading, pocket kantor & reimburse: hanya ruang Pribadi.
+- Net worth: per ruang; "total keluarga" ditunda.
+- pgTAP: dua user × semua tabel × semua operasi, termasuk laporan/ekspor/AI tidak pernah menyentuh ruang Pribadi orang lain.
+
+### 5.5 Job terjadwal
+Worker Node terpisah memakai **pg-boss** (antrean + cron di Postgres, retry, tanpa Redis): `recurring_materialize` (00:05 WIB), `net_worth_snapshot` (23:55 WIB), `price_refresh` (16:30 WIB hari bursa), `purge_voided` (mingguan), `backup_verify` (mingguan). Semua idempoten; status di tabel `job_runs`; gagal → alert.
+
+### 5.6 Catat cepat & kategorisasi (permintaan pemilik)
+1. **M1:** saran kategori dari riwayat ruang aktif (kata kunci deskripsi, jam, nominal, dompet) — fungsi DB `api.suggest_categories(text, amount, account)`; 6 chip saran di quick add.
+2. **M6:** kolom ketik bebas "makan siang 35rb bca" → parser aturan (nominal "35rb/35k/35.000", alias dompet) + fallback LLM (server, tanpa data selain teks itu) → pratinjau → konfirmasi. Tidak pernah menyimpan tanpa konfirmasi.
+3. **M8 (setelah stabil):** bot **Telegram** memakai parser yang sama, akun ditautkan lewat kode sekali pakai; WhatsApp ditunda (Business API butuh verifikasi Meta & berbayar; library tidak resmi berisiko blokir nomor).
+
+### 5.7 Deploy & operasi
+- **Repo baru private** `novandafadly/dompetku-v2` (dibuat pemilik), monorepo: `apps/web`, `apps/worker`, `packages/db` (migrasi SQL, tipe, pgTAP), `infra/` (compose, proxy, backup), `docs/`.
+- **CI (GitHub Actions):** lint, typecheck, unit, Postgres service + migrasi + pgTAP, build, Playwright (desktop & mobile, axe), `npm audit`/osv, build image multi-arch → GHCR private.
+- **CD:** pada tag/merge ke `main`: job deploy (SSH key khusus deploy, environment protection GitHub) → `docker compose pull` → migrasi (role owner) → `up -d` web+worker → health check `/api/health` → rollback otomatis ke image sebelumnya bila gagal. Migrasi wajib maju-kompatibel (expand/contract) agar rollback aman.
+- **VM DB:** compose project `dompetku` terpisah: image Postgres 17 + WAL-G, volume sendiri, port hanya di IP privat, `listen_addresses` + `pg_hba` hanya IP VM App, `scram-sha-256`, TLS. Batas memori/CPU container agar tidak mengganggu app lain.
+- **VM App:** compose project `dompetku` (web, worker) dengan limit memori; reverse proxy: pakai yang sudah ada di VM App bila ada (dicek di M0), bila tidak **Caddy** (HTTPS otomatis). DNS `dompet.novandafadly.com` → IP publik VM App. OCI security list: 443 publik; 5437 (port Postgres DompetKu) hanya dari VM App.
+- **Backup:** WAL-G base backup harian + WAL archiving kontinu ke OCI Object Storage (S3-compatible, kunci Customer Secret khusus bucket, enkripsi sisi klien), retensi 30 hari + bulanan 12 bulan. Target **RPO ≤ 5 menit, RTO ≤ 1 jam**. Job mingguan me-restore ke container sementara dan menjalankan pgTAP rekonsiliasi; gagal → alert.
+- **Observabilitas:** log JSON terstruktur (pino) tanpa nominal/deskripsi; `postgres_exporter` + metrik app ke Prometheus/Grafana yang sudah ada; alert: app down, backup gagal, job gagal, disk > 80%, error rate. Error tracking: Sentry self-hosted terlalu berat → GlitchTip opsional atau log + alert (keputusan builder).
+- **Keamanan tambahan:** header CSP (nonce)/HSTS/XFO/Referrer/Permissions; secrets di file env di VM (`chmod 600`) dan GitHub Environments, tidak di repo; Renovate; `unattended-upgrades` di VM; audit log aksi sensitif (login, ekspor, undang, cabut sesi).
+
+## 6. Rencana fitur (konsolidasi)
+
+Matriks pertahankan/gabung/ubah/buang di `docs/audit/SUMMARY.md` §2 tetap berlaku, ditambah: ruang Pribadi/Bersama (M1), saran kategori (M1), catat teks bebas (M6), bot Telegram (M8).
+Milestone (detail kriteria di `docs/v2/ROADMAP.md`, diperbarui untuk revisi ini):
+- **M0** fondasi: repo, CI/CD, infra VM (Postgres terisolasi, proxy, backup + uji restore), auth + undangan pasangan + 2FA, ruang, design system, **prototipe klik** Beranda/catat cepat/Transaksi dengan data demo untuk dinilai pemilik.
+- **M1** dompet, kategori + saran, transaksi, transfer (termasuk lintas ruang), talangan kantor.
+- **M2** anggaran (pribadi & bersama), laporan, Beranda "aman dipakai".
+- **M3** utang/piutang & modal trading.
+- **M4** tujuan tabungan & aset/saham.
+- **M5** tagihan rutin, trip, export.
+- **M6** AI, net worth, PWA offline-baca, catat teks bebas.
+- **M7** migrasi data v1 & cutover.
+- **M8** bot Telegram.
+
+## 7. Diputuskan pemilik (2026-10-29)
+Semua rekomendasi `docs/v2/DESIGN.md` §12 disetujui (allowlist pribadi, migrasi data dengan entri penyesuaian, piutang = aset, cicilan bukan pengeluaran,
+talangan kantor bukan pengeluaran pribadi, 1 dompet = 1 tujuan, tolak bayar lebih, soft delete 90 hari, kartu kredit ditunda, Gemini 20/hari);
+self-hosted opsi B; urutan C; domain publik `novandafadly.com`; ruang Bersama terpisah dengan anggaran sendiri; repo private, portofolio via screenshot data demo.
+
+## 8. Diserahkan ke builder
+- Pilihan versi tepat library (Next, Better Auth, Kysely, pg-boss, WAL-G) saat M0, dicatat di ADR.
+- Penyedia email transaksional (Resend/SMTP lain).
+- GlitchTip vs log+alert untuk error tracking.
+- Nama subdomain akhir (usulan `dompet.novandafadly.com`) dan port Postgres DompetKu (usulan 5437).
+- Struktur detail monorepo (npm workspaces vs pnpm).
