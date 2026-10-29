@@ -1,0 +1,88 @@
+INSERT 0 2
+INSERT 0 3
+INSERT 0 1
+CREATE FUNCTION
+SET
+              set_config              
+--------------------------------------
+ 00000000-0000-0000-0000-00000000000a
+
+== S1 UPDATE transactions.amount tidak menyentuh saldo (savings-goals/page.tsx:513, trigger hanya INSERT/DELETE)
+INSERT 0 1
+UPDATE 1
+  name  | balance | expected_balance 
+--------+---------+------------------
+ A-Bank |  900000 |           700000
+
+== S2 Edit saldo dompet diam-diam diabaikan (wallets/page.tsx:61-62 vs trigger prevent_direct_balance_update)
+  name  | balance_after_update_request_42 
+--------+---------------------------------
+ A-Cash |                          500000
+
+UPDATE 1
+== S3 Edit transaksi = DELETE lalu INSERT; INSERT gagal => transaksi hilang (transactions/page.tsx:172,180-196)
+INSERT 0 1
+DELETE 1
+psql:/home/user/dompetku/docs/audit/repro/scenarios.sql:38: ERROR:  new row for relation "transactions" violates check constraint "transactions_amount_check"
+ tx_makan_remaining 
+--------------------
+                  0
+
+== S4 Edit utang menghapus semua cicilan tapi paid_amount tetap (debts/page.tsx:76-81,236,263-289)
+INSERT 0 1
+INSERT 0 1
+UPDATE 1
+INSERT 0 1
+UPDATE 1
+INSERT 0 1
+ cash_before_edit 
+------------------
+          1100000
+
+DELETE 3
+DELETE 0
+UPDATE 1
+INSERT 0 1
+ cash_after_edit | paid_amount | payment_rows_left | principal_date_now 
+-----------------+-------------+-------------------+--------------------
+         1500000 |      400000 |                 0 | 2026-10-29
+
+== S5 Edit riwayat top-up goal berbasis aset membuang to_asset_id (savings-goals/page.tsx:525-543)
+INSERT 0 1
+INSERT 0 1
+ rdpu_before | bank_before 
+-------------+-------------
+      500000 |      400000
+
+DELETE 1
+INSERT 0 1
+ rdpu_after_edit_to_600k | bank_after 
+-------------------------+------------
+                       0 |     300000
+
+== S6 Lintas-tenant: B mengubah saldo dompet A via UPDATE lalu DELETE transfer (policy UPDATE transfers hanya cek user_id)
+              set_config              
+--------------------------------------
+ 00000000-0000-0000-0000-00000000000b
+
+INSERT 0 1
+UPDATE 1
+RESET
+ a_bank_before_b_delete 
+------------------------
+                 300000
+
+SET
+DELETE 1
+RESET
+ a_bank_after_b_delete 
+-----------------------
+                299999
+
+== S7 Saldo vs ledger setelah skenario (invarian saldo = saldo awal + ledger)
+  name  | balance | ledger  | implied_opening 
+--------+---------+---------+-----------------
+ A-Bank |  299999 | -900000 |         1199999
+ A-Cash | 1500000 | 1000000 |          500000
+ B-Bank |  999999 |       0 |          999999
+
