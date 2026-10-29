@@ -38,7 +38,8 @@ dan tampil rapi sehingga screenshot-nya layak jadi portofolio.
 - **VM DB** `rtp-prod-db-01` (`10.0.1.68`, privat): 3 vCPU, 17 GiB RAM, idle; sudah ada Postgres app lain (`:5435`, `:5436`) dan Redis via Docker Compose.
 - Arsitektur CPU kedua VM belum diketahui (Ampere ARM atau x86) → image dibangun multi-arch.
 - Sesi Claude di cloud tidak bisa SSH ke VM; deploy lewat GitHub Actions atau dijalankan pemilik.
-- v1 dan project Supabase v1 read-only sampai cutover.
+- v1 dan project Supabase v1 read-only sampai v2 dipakai; setelah itu v1 diarsipkan (ekspor CSV/JSON per akun untuk referensi pribadi, tidak diimpor).
+- **Tidak ada migrasi data**: pemilik dan pasangan (Farida) mulai dari nol di v2 (keputusan pemilik 2026-10-29).
 
 ## 4. Pendekatan yang dipertimbangkan
 
@@ -134,13 +135,26 @@ Milestone (detail kriteria di `docs/v2/ROADMAP.md`, diperbarui untuk revisi ini)
 - **M4** tujuan tabungan & aset/saham.
 - **M5** tagihan rutin, trip, export.
 - **M6** AI, net worth, PWA offline-baca, catat teks bebas.
-- **M7** migrasi data v1 & cutover.
+- **M7** ~~migrasi data v1~~ dihapus; diganti arsip ekspor v1 + cutover sederhana (mulai dipakai, v1 dimatikan).
 - **M8** bot Telegram.
 
 ## 7. Diputuskan pemilik (2026-10-29)
 Semua rekomendasi `docs/v2/DESIGN.md` §12 disetujui (allowlist pribadi, migrasi data dengan entri penyesuaian, piutang = aset, cicilan bukan pengeluaran,
 talangan kantor bukan pengeluaran pribadi, 1 dompet = 1 tujuan, tolak bayar lebih, soft delete 90 hari, kartu kredit ditunda, Gemini 20/hari);
 self-hosted opsi B; urutan C; domain publik `novandafadly.com`; ruang Bersama terpisah dengan anggaran sendiri; repo private, portofolio via screenshot data demo.
+
+## 7a. Jawaban atas builder check (2026-10-29)
+
+Keputusan pemilik:
+- Pasangan = Farida (akun v1 kedua). Ruang Pribadi kedua akun dan ruang Bersama **mulai kosong**; tidak ada migrasi.
+- VM App sempit → web + worker DompetKu dijalankan di **VM DB** (container terpisah, limit CPU/RAM), reverse proxy TLS tetap di VM App meneruskan ke IP privat VM DB. Postgres tetap hanya mendengar di network Docker internal + IP privat.
+- Deploy via **GitHub self-hosted runner** (di VM yang menjalankan app, user khusus tanpa sudo luas); setup awal infra lewat runbook yang dijalankan pemilik (atau sesi Claude Code di VM).
+
+Keputusan builder (dapat ditinjau pemilik):
+- Transfer lintas ruang: header entri milik ruang **sumber**; hanya pencatat yang bisa mengedit/membatalkan; ruang tujuan melihat "Setoran dari <nama>" tanpa nama dompet sumber. Arah sebaliknya (Bersama → pribadi) diizinkan untuk anggota mana pun, tercatat "Diambil oleh <nama>". Laporan Bersama menampilkan kontribusi per orang (dihitung, tanpa logika pelunasan).
+- Hak di Bersama setara untuk kedua anggota (catat, edit, batal, kelola dompet/anggaran); setiap perubahan tercatat di `entry_history` + feed aktivitas Bersama.
+- Tidak ada staging permanen; staging = stack compose sementara saat dibutuhkan + preview lokal; CI memakai Postgres efemeral.
+- Alert dikirim ke email pemilik (dan Telegram setelah M8). Kunci enkripsi backup disimpan pemilik di password manager; runbook memuat langkah verifikasinya.
 
 ## 8. Diserahkan ke builder
 - Pilihan versi tepat library (Next, Better Auth, Kysely, pg-boss, WAL-G) saat M0, dicatat di ADR.
