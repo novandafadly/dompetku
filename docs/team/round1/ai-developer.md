@@ -66,7 +66,7 @@ scaled      = number , ws? , unit , [ digits ] ;          (* "35rb", "1,5 jt", "
 unit        = thousand | million | billion ;
 thousand    = "rb" | "ribu" | "k" | "rebu" ;
 million     = "jt" | "juta" | "m" (* hanya bila diikuti spasi/akhir, bukan "mie" *) ;
-billion     = "m" "ilyar" | "miliar" | "milyar" ;
+billion     = "miliar" | "milyar" | "m" , "iliar" ;  (* "m" sendiri = juta, lihat million *)
 number      = digits , [ ( "," | "." ) , digit , [ digit , [ digit ] ] ] ;   (* desimal hanya sebelum unit: "1,5jt" "1.5jt" "2,25jt" *)
 grouped     = digit , [ digit , [ digit ] ] , { "." , digit , digit , digit }- ;  (* "35.000" "1.250.000" — titik = pemisah ribuan *)
 plain       = digits ;                                    (* "35000"; bila < 1000 -> AMBIGU, lihat aturan *)
@@ -351,7 +351,7 @@ Contoh `MonthlyAnalysis` valid:
 ## Lampiran B — Sketsa implementasi parser nominal
 
 ```ts
-const UNIT: Record<string, number> = { rb: 1e3, ribu: 1e3, rebu: 1e3, k: 1e3, jt: 1e6, juta: 1e6, m: 1e6, miliar: 1e9, milyar: 1e9, m_ilyar: 1e9 };
+const UNIT: Record<string, number> = { rb: 1e3, ribu: 1e3, rebu: 1e3, k: 1e3, jt: 1e6, juta: 1e6, m: 1e6, miliar: 1e9, milyar: 1e9 };
 const SLANG: Record<string, number> = { seceng: 1e3, goceng: 5e3, ceban: 1e4, noban: 2e4, goban: 5e4, gocap: 5e4, cepek: 100, gopek: 500, seribu: 1e3, sejuta: 1e6 };
 
 // (rp)? angka (desimal)? spasi? unit (sisa)?   — dijalankan per token kandidat, bukan regex global
