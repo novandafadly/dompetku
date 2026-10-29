@@ -1,0 +1,543 @@
+{
+  "viewports": {
+    "mobile": {
+      "pages": {
+        "auth": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 1
+            }
+          ],
+          "taps": {
+            "total": 3,
+            "under44": 0
+          },
+          "cls": 0
+        },
+        "dashboard-empty": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 20
+            }
+          ],
+          "taps": {
+            "total": 24,
+            "under44": 2
+          },
+          "cls": 0
+        },
+        "wallets": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 20
+            }
+          ],
+          "taps": {
+            "total": 35,
+            "under44": 9
+          },
+          "cls": 0
+        },
+        "transactions": {
+          "axe": [
+            {
+              "id": "button-name",
+              "impact": "critical",
+              "n": 1
+            },
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 15
+            }
+          ],
+          "taps": {
+            "total": 31,
+            "under44": 6
+          },
+          "cls": 0
+        },
+        "transfers": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 11
+            }
+          ],
+          "taps": {
+            "total": 31,
+            "under44": 7
+          },
+          "cls": 0
+        },
+        "budgets": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 9
+            }
+          ],
+          "taps": {
+            "total": 31,
+            "under44": 8
+          },
+          "cls": 0
+        },
+        "debts": {
+          "axe": [
+            {
+              "id": "button-name",
+              "impact": "critical",
+              "n": 1
+            },
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 18
+            }
+          ],
+          "taps": {
+            "total": 32,
+            "under44": 3
+          },
+          "cls": 0
+        },
+        "savings-goals": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 16
+            }
+          ],
+          "taps": {
+            "total": 32,
+            "under44": 7
+          },
+          "cls": 0
+        },
+        "reports": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 41
+            },
+            {
+              "id": "select-name",
+              "impact": "critical",
+              "n": 1
+            }
+          ],
+          "taps": {
+            "total": 24,
+            "under44": 1
+          },
+          "cls": 0
+        },
+        "assets": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 8
+            }
+          ],
+          "taps": {
+            "total": 27,
+            "under44": 1
+          },
+          "cls": 0
+        },
+        "trips": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 8
+            }
+          ],
+          "taps": {
+            "total": 24,
+            "under44": 1
+          },
+          "cls": 0
+        },
+        "recurring": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 8
+            }
+          ],
+          "taps": {
+            "total": 24,
+            "under44": 1
+          },
+          "cls": 0
+        },
+        "categories": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 23
+            }
+          ],
+          "taps": {
+            "total": 50,
+            "under44": 25
+          },
+          "cls": 0
+        },
+        "export": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 17
+            },
+            {
+              "id": "label",
+              "impact": "critical",
+              "n": 2
+            },
+            {
+              "id": "select-name",
+              "impact": "critical",
+              "n": 3
+            }
+          ],
+          "taps": {
+            "total": 35,
+            "under44": 1
+          },
+          "cls": 0
+        },
+        "ai-analysis": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 10
+            },
+            {
+              "id": "select-name",
+              "impact": "critical",
+              "n": 1
+            }
+          ],
+          "taps": {
+            "total": 27,
+            "under44": 3
+          },
+          "cls": 0
+        },
+        "credit-cards": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 8
+            }
+          ],
+          "taps": {
+            "total": 24,
+            "under44": 1
+          },
+          "cls": 0
+        }
+      },
+      "flows": {
+        "dashboardRequests": 9,
+        "quickAddTapsFromTransactions": 4,
+        "quickAddNote": "FAB hanya ada di /transactions; dari Beranda +1 ketukan navigasi (bottom nav).",
+        "transferOverdraftDialog": "Saldo Darurat-mobile tidak cukup (Rp 10.000.000). Lanjutkan?",
+        "budgetModalStillOpen": 0,
+        "dialogs": [
+          "Saldo Darurat-mobile tidak cukup (Rp 10.000.000). Lanjutkan?"
+        ]
+      }
+    },
+    "desktop": {
+      "pages": {
+        "auth": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 1
+            }
+          ],
+          "taps": {
+            "total": 3,
+            "under44": 0
+          },
+          "cls": 0
+        },
+        "dashboard-empty": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 22
+            },
+            {
+              "id": "scrollable-region-focusable",
+              "impact": "serious",
+              "n": 1
+            }
+          ],
+          "taps": {
+            "total": 17,
+            "under44": 1
+          },
+          "cls": 0
+        },
+        "wallets": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 21
+            }
+          ],
+          "taps": {
+            "total": 36,
+            "under44": 16
+          },
+          "cls": 0
+        },
+        "transactions": {
+          "axe": [
+            {
+              "id": "button-name",
+              "impact": "critical",
+              "n": 1
+            },
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 21
+            }
+          ],
+          "taps": {
+            "total": 24,
+            "under44": 5
+          },
+          "cls": 0
+        },
+        "transfers": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 9
+            }
+          ],
+          "taps": {
+            "total": 28,
+            "under44": 10
+          },
+          "cls": 0.021
+        },
+        "budgets": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 7
+            }
+          ],
+          "taps": {
+            "total": 24,
+            "under44": 7
+          },
+          "cls": 0
+        },
+        "debts": {
+          "axe": [
+            {
+              "id": "button-name",
+              "impact": "critical",
+              "n": 2
+            },
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 16
+            }
+          ],
+          "taps": {
+            "total": 29,
+            "under44": 3
+          },
+          "cls": 0
+        },
+        "savings-goals": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 16
+            }
+          ],
+          "taps": {
+            "total": 31,
+            "under44": 10
+          },
+          "cls": 0.068
+        },
+        "reports": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 41
+            },
+            {
+              "id": "select-name",
+              "impact": "critical",
+              "n": 1
+            }
+          ],
+          "taps": {
+            "total": 17,
+            "under44": 0
+          },
+          "cls": 0
+        },
+        "assets": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 5
+            }
+          ],
+          "taps": {
+            "total": 20,
+            "under44": 0
+          },
+          "cls": 0
+        },
+        "trips": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 5
+            }
+          ],
+          "taps": {
+            "total": 17,
+            "under44": 0
+          },
+          "cls": 0
+        },
+        "recurring": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 5
+            }
+          ],
+          "taps": {
+            "total": 17,
+            "under44": 0
+          },
+          "cls": 0
+        },
+        "categories": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 20
+            }
+          ],
+          "taps": {
+            "total": 43,
+            "under44": 24
+          },
+          "cls": 0
+        },
+        "export": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 14
+            },
+            {
+              "id": "label",
+              "impact": "critical",
+              "n": 2
+            },
+            {
+              "id": "select-name",
+              "impact": "critical",
+              "n": 3
+            }
+          ],
+          "taps": {
+            "total": 28,
+            "under44": 0
+          },
+          "cls": 0
+        },
+        "ai-analysis": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 7
+            },
+            {
+              "id": "select-name",
+              "impact": "critical",
+              "n": 1
+            }
+          ],
+          "taps": {
+            "total": 20,
+            "under44": 2
+          },
+          "cls": 0
+        },
+        "credit-cards": {
+          "axe": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "n": 5
+            }
+          ],
+          "taps": {
+            "total": 17,
+            "under44": 0
+          },
+          "cls": 0
+        }
+      },
+      "flows": {
+        "dashboardRequests": 9,
+        "quickAddTapsFromTransactions": 4,
+        "quickAddNote": "FAB hanya ada di /transactions; dari Beranda +1 ketukan navigasi (bottom nav).",
+        "transferOverdraftDialog": null,
+        "budgetModalStillOpen": 1,
+        "dialogs": []
+      }
+    }
+  }
+}
