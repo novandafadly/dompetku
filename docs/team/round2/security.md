@@ -1,0 +1,31 @@
+# Ronde 2 — Cybersecurity Engineer
+
+Dasar: `round2/register.md`, `round1/security.md` (R1–R12, K-01..K-32), `round1/backend-engineer.md`, `round1/data-engineer.md`, `round1/devops-sre.md`.
+
+## 1. Butir yang saya minta ubah (tidak ada yang saya tolak total)
+
+| # | Masalah | Usulan pengganti |
+|---|---|---|
+| **A1** | Draf `api.create_transfer` (backend §R1, baris 669/679) menyalin `v_desc` ke **kedua** kaki. Akibatnya deskripsi entri Pribadi terbaca pasangan di ruang Bersama. Ini anti-tujuan SPEC §2. | Kaki tujuan: `description = NULL`, label dirender dari `kind` + `created_by`. Catatan untuk Bersama hanya lewat kolom `shared_note` yang diisi eksplisit. `entry_history.snapshot` kaki tujuan juga tanpa akun/deskripsi sumber. Kode error lintas ruang `DK404` identik untuk "tidak ada" dan "bukan milikmu". pgTAP: B tidak melihat `description`, `account_id` sumber, atau nama dompet A, termasuk lewat `link_id`, history, laporan, dan ekspor. |
+| **A3** | (a) Web dan worker berbagi login `dompetku_app`, sehingga kompromi web bisa memanggil fungsi khusus worker (purge, dq, snapshot). (b) `dompetku_auditor` diusulkan `BYPASSRLS` (data §R4), tetapi syaratnya belum ditulis. (c) View (`app.report_lines`, saldo) tidak disebut. View tanpa `security_invoker` berjalan sebagai pemiliknya. | 5 role: tambah login `dompetku_worker`. `EXECUTE` purge/dq/snapshot hanya untuk role ini. `dompetku_auditor` **NOLOGIN**, hanya dipakai lewat satu fungsi DEFINER `private.dq_run()` yang bisa dieksekusi worker saja. Keluarannya tanpa nominal/deskripsi. `backup_verify` memakai superuser container restore sementara, bukan role di produksi. Semua view `WITH (security_invoker = true)`. Tes katalog C8 mencakup view dan grant per role. |
+| **A9** | Purge fisik bisa dipakai menghapus jejak di ruang Bersama. Jalurnya: void lalu tunggu 90 hari. Selain itu FK `entry_history → entries` akan memblok purge atau ikut ter-cascade. | Setuju 90 hari, dengan syarat: `entry_history` ringkas tetap memuat aktor, op, waktu, kind, nominal, dan akun (tanpa deskripsi) selama 1 tahun. Tabel ini append-only, tanpa FK cascade ke `entries`. Purge hanya oleh `dompetku_worker`. Pasangan `space_transfer` dipurge bersamaan. Setiap run tercatat di `audit.events`. UI menyebut retensi backup 12 bulan. |
+| **B1** | Ada tiga lubang. (1) Tag `main` di GHCR bisa ditimpa; tanpa aturan monotonik, deployer bisa dipaksa turun ke digest lama yang rentan. (2) GHCR private tidak mendukung PAT fine-grained; `read:packages` klasik mencakup semua paket akun. (3) Migrasi otomatis memakai kredensial owner. | Deployer menolak digest dengan `run_number`/waktu attestation ≤ digest yang sedang jalan. Pengecualian: rollback manual lewat CLI di VM. Pakai token akun bot/terpisah, hanya `read:packages`, kedaluwarsa 90 hari, dan diingatkan alert. Identitas attestation dipatok ke `release.yml@refs/heads/main`. CODEOWNERS wajib untuk `db/migrations/`, `.github/`, `infra/`. |
+| **B3** | Rantai proxy ada dua hop (edge VM App → `gw` → web). Bila edge *menambah* `X-Forwarded-For`, klien bisa memalsukan IP sehingga rate limit dan audit IP rusak. | Edge **menimpa** XFF/`X-Forwarded-Proto`/`Host` dan membuang `x-middleware-subrequest`. `gw` hanya meneruskan XFF dari klien ber-sertifikat `CN=edge`. Web hanya percaya `gw` (`TRUSTED_PROXY_CIDR`). Tes: XFF palsu dari internet tidak muncul di `audit.events.ip`. |
+| **B5** | Belum ada aturan siklus hidup faktor. Siapa pun yang memegang sesi curian bisa menambah passkey sendiri atau menghapus TOTP. | Tambah/hapus faktor wajib step-up (≤ 10 menit). Faktor kuat terakhir tidak bisa dihapus. Kode cadangan 10 buah (hash, sekali pakai). Kehilangan semua faktor hanya dipulihkan lewat CLI break-glass di VM + email ke kedua akun. Signup dimatikan; undangan sekali pakai 72 jam; batas keras 2 user di DB. |
+| **C2** | `spaceId` dari URL/klien bisa dimanipulasi. | `spaceId` hanya selektor, bukan izin. Fungsi DB menurunkan ruang dari `account_id` dan menolak (`DK404`) bila tidak cocok dengan `spaceId` atau bukan anggota. |
+| **C11** | Kuota yang dihitung di memori bisa direset lewat restart. Bot tidak punya batas pengirim. | Kuota ditegakkan atomik di DB (`ai_usage`). Budget cap billing Google menjadi batas atas. Long polling: satu konsumen; pesan dari `chat_id` yang belum ditautkan/grup diabaikan. Keluaran AI divalidasi Zod, dirender sebagai teks, dan selalu lewat pratinjau + konfirmasi. Balasan bot tanpa saldo secara default. |
+
+## 2. Celah wajib yang belum ada di register (rujukan `round1/security.md`)
+
+1. **Auth anti brute force (M0):** rate limit Better Auth `storage: "database"`, lockout bertahap, respons + waktu login/reset seragam (R4, C5–C6).
+2. **Audit log append-only + alert keamanan (M0):** `audit.events` (INSERT via fungsi, trigger tolak UPDATE/DELETE). Alert untuk login gagal, perubahan 2FA, ekspor, deploy/verifikasi gagal, backup gagal (R12, C15).
+3. **Backup tahan-hapus (M0):** enkripsi klien WAL-G, bucket dengan retention lock, kredensial tanpa `OBJECT_DELETE`, kunci di VM + password manager, restore uji dari laptop (R10, C14). B4 baru menyentuh verifikasi.
+4. **Rantai pasok npm (M0):** `--frozen-lockfile` + `onlyBuiltDependencies`, Renovate `minimumReleaseAge: 3 days`, SLA patch critical/high Next/React/Better Auth ≤ 48 jam (R8). B7 hanya mencakup scanner.
+5. **Secrets & redaksi log (M0):** secret sebagai file per service (`0400`, bukan env global), validasi Zod saat start. pino `redact` + Postgres `log_parameter_max_length_on_error = 0`. Payload pg-boss hanya id. Tes log tanpa nominal/deskripsi/email (R9, R10, C10).
+6. **CSP nonce + header keamanan (M0):** `script-src 'nonce-…' 'strict-dynamic'`, HSTS, `frame-ancestors 'none'`. Larang `dangerouslySetInnerHTML` (R7, C2). B6 hanya mencakup origin dan cache.
+7. **Tabel Better Auth di luar RLS:** taruh di skema `auth`. Rahasia TOTP terenkripsi. `dompetku_worker` tanpa akses ke skema ini.
+8. **Akun induk (pemilik, sekarang):** MFA passkey/hardware di akun GitHub dan OCI. Setelah upgrade PAYG (B9), pasang budget alert. Hardening SSH + `unattended-upgrades` (R11).
+
+## 3. Setuju (dari sisi keamanan)
+
+A2, A4, A5, A6, A7, A8, A10, A11, A12 (dengan view `security_invoker`, lihat A3), A13, B2, B4, B6, B7, B8, B9, C1, C3–C10, C12–C14.
