@@ -162,3 +162,62 @@ Keputusan builder (dapat ditinjau pemilik):
 - GlitchTip vs log+alert untuk error tracking.
 - Nama subdomain akhir (usulan `dompet.novandafadly.com`) dan port Postgres DompetKu (usulan 5437).
 - Struktur detail monorepo (npm workspaces vs pnpm).
+
+## 9. Keputusan tim (final setelah ronde 1–2, 2026-10-29)
+
+Sumber: `docs/team/round1/*` (10 peran), `docs/team/round2/register.md` + tinjauan PM, Backend, Security.
+Bagian ini **mengalahkan** §1–8 di atas dan `docs/v2/*` bila bertentangan.
+
+### 9.1 Data & domain uang
+- **Transfer lintas ruang = dua entri `space_transfer`** (satu per ruang) diikat `link_id`; trigger pasangan memastikan nominal sama dan void bersama. Kaki tujuan **tanpa deskripsi**; catatan untuk Bersama hanya lewat `shared_note` yang diisi eksplisit. Ruang tujuan melihat "Setoran dari <nama>", tanpa nama dompet sumber. Edit/void hanya oleh pencatat. Cek `space_mismatch` di setiap fungsi.
+- **Lines transfer:** `main = −amount`, `fee = −fee` (akun sumber), `counter = +amount`; Σ = −fee (memperbaiki bug hitung fee 2× di DESIGN §5).
+- **Role DB (5):** `dompetku_owner` (DDL, migrasi), `dompetku_api` (NOLOGIN, pemilik fungsi tulis `SECURITY DEFINER`, policy `TO dompetku_api`), `dompetku_web` (login web), `dompetku_worker` (login worker, hak minimal), `dompetku_auditor` (NOLOGIN, dipakai lewat `SET ROLE` oleh job dq/backup verify). Fungsi & view **baca** = `SECURITY INVOKER` / `security_invoker = true`; pengecualian DEFINER hanya `app.my_space_ids()` dan `app.space_roster()`. `REVOKE EXECUTE … FROM PUBLIC` default. Tabel Better Auth di skema `auth` di luar RLS, hanya bisa diakses role web.
+- **Konteks request:** `app.current_user_id()` = `nullif(current_setting('app.user_id', true), '')::uuid`; hanya `set_config(..., true)` dalam satu transaksi pendek per loader/action; `SET` sesi, `sql.raw`, dan `current_date` dilarang lewat lint; `app.today()`/`app.now()` dengan override waktu **hanya** bila env dev/test; timeout statement & idle-in-transaction per role.
+- **Constraint deferrable** dicek eksplisit (`set constraints all immediate`) di akhir setiap fungsi `api.*`; pgTAP memanggil fungsi, bukan insert mentah. Urutan lock tetap (akun naik menurut id), retry deadlock terbatas, tes konkurensi dua koneksi.
+- **Idempotensi:** tabel `idempotency_keys (user_id, client_id, request_hash, result)`; kunci sama + isi beda → `DK410`.
+- **Driver:** `pg` + Kysely + kysely-codegen; parser tipe `date` → string `YYYY-MM-DD`, `int8`/`numeric` → string lalu divalidasi ke bigint/number aman. Migrasi: **dbmate** (maju-saja di produksi, expand/contract, uji N-1).
+- **Saldo:** view `account_balances` = `accounts LEFT JOIN` agregat lines. Dompet baru punya `opened_on` + entri `opening_balance`; saldo awal boleh diedit langsung 7 hari pertama. **"Cocokkan saldo"** menerima saldo nyata, selisihnya dihitung DB menjadi entri `adjustment`.
+- **Saldo tidak cukup:** peringatan inline di sheet (bukan dialog), tetap bisa disimpan dengan `p_allow_negative`; akun aset tidak boleh negatif.
+- **Hapus:** soft delete; entri void dipurge permanen setelah 90 hari (keputusan pemilik) dengan menyisakan `entry_tombstones` (id, ruang, jenis, tanggal, tanpa nominal/deskripsi; tanpa FK); `entry_history` append-only ikut terhapus bersama entrinya.
+- **Laporan:** satu view `app.report_lines` + `app.report_class()` (15 kelas) dipakai laporan, anggaran, ekspor, AI, net worth; materialized view dilarang untuk data ruang. Snapshot net worth 00:10 WIB untuk hari sebelumnya + daftar "hari kotor". Job `dq_reconcile` 01:00 WIB (10 cek, alert tanpa nominal).
+- **Kategori:** saran dari `api.suggest_categories` (skor teks/jam/nominal/dompet/kebaruan) dicampur kamus kata kunci awal saat riwayat kosong; chip diurutkan ulang setelah nominal diketik dan dibekukan begitu disentuh; kategori tidak pernah dipilih otomatis. Parser nominal "35rb/35k/1,5jt" ada sejak M1.
+
+### 9.2 Infra & keamanan
+- **Deploy pull-based** (menggantikan self-hosted runner, menunggu konfirmasi pemilik): build, tes, SBOM, attestation di GitHub-hosted runner → GHCR; di VM, timer systemd menarik digest `main` terbaru dengan token GHCR read-only, memverifikasi attestation, **menolak digest lebih lama** dari yang berjalan, lalu `/opt/dompetku/bin/deploy` (kunci migrasi, preflight, migrasi, health, rollback otomatis).
+- **Jaringan:** Postgres tanpa port host (network Docker `internal`). Satu pintu `gw` (Caddy) dengan mTLS di `10.0.1.68:8443` (app) dan `:9443` (metrik), hanya dari IP privat VM App. Header forward hanya dipercaya dari `gw`; `x-middleware-subrequest` dibuang.
+- **Auth:** faktor kuat wajib — passkey ATAU password+TOTP; kode pemulihan wajib saat daftar; ditegakkan di `requireUser`/`withUser` (sesi `pending_2fa` ditolak, `amr` disimpan di sesi); reset password mencabut semua sesi dan tidak mematikan 2FA; undangan pasangan hash + sekali pakai; batas keras 2 user; respons login/reset seragam; rate limit + lockout bertahap.
+- **Aplikasi:** origin check untuk `/api/*`; CSP nonce; `Cache-Control: no-store` untuk halaman berdata; cache data Next dilarang untuk data user; ruang aktif di URL (`/pribadi/…`, `/bersama/…`) dan setiap action menerima `spaceId` eksplisit.
+- **Audit log** append-only (login, 2FA, ekspor, undangan, sesi dicabut, pindah ruang) + alert untuk anomali.
+- **Backup:** WAL-G terenkripsi (kunci di password manager pemilik), bucket dengan retention lock, kredensial tanpa izin hapus, `archive_timeout=300`; uji restore mingguan via timer host + dead-man Healthchecks.io; latihan PITR bulanan. RPO ≤ 5 menit; RTO ≤ 1 jam (≤ 3 jam bila VM DB hilang sampai provisioning dilatih).
+- **Rantai pasok & CI:** gitleaks, Semgrep OSS, osv-scanner, Trivy, actionlint + zizmor, pgTAP keamanan, Playwright keamanan; Actions dipatok SHA; lockfile + `pnpm` dengan `minimumReleaseAge` / Renovate 3 hari; patch critical ≤ 48 jam. Secrets per file (`chmod 600`), redaksi log (tanpa nominal/deskripsi).
+
+### 9.3 Produk & UX
+- **IA:** tab bar `Beranda · Transaksi · [Catat] · Dompet · Rencana` (Catat di slot tengah, bukan FAB); Rencana disembunyikan sampai ada isinya; Laporan = tampilan `Ringkasan` di tab Transaksi; "Menu" berlabel di header (Trip, Kategori, Kontak, Export, Analisis, Pengaturan). Segmen Transaksi: `Semua · Kantor · Talangan`.
+- **Ruang:** pengalih `Pribadi | Bersama` di header, warna aksen per ruang selalu dengan label; sheet Catat menyebut ruang tujuan, dompet terbatas ke ruang itu, "Pindah ke Bersama/Pribadi" atomik; feed aktivitas Bersama dengan pelaku dan sebelum/sesudah.
+- **Beranda:** "aman dipakai" per ruang (default sampai akhir bulan, tanggal gajian per orang opsional), tagihan mendatang, anggaran; net worth pindah ke Dompet. Tombol "Tidak ada pengeluaran hari ini".
+- **Visual:** arah "buku kas" (kertas hangat, nila = Pribadi, bata = Bersama, angka tabular, garis total ganda, minus U+2212), ikon Phosphor, gerak minimal; serif untuk angka hero diuji di prototipe M0a. Token warna diganti mengikuti ukuran kontras di `docs/team/round1/ui-ux.md` (border ≥ 3:1 di `bg` dan `surface`; teks tombol primer dark ≥ 4,5:1).
+- **Frontend:** Next 16 standalone, React 19, Node 24 LTS, pnpm workspaces, Tailwind v4, Radix, Zod + React Hook Form; **tanpa** TanStack Query; formatter uang & tanggal sendiri (deterministik server/klien); `client_id` dibuat sekali per sheet; optimistic UI + undo; budget JS diukur di Playwright.
+- **AI:** Gemini tier berbayar (menunggu pemilik) di balik `LlmProvider` yang bisa diganti; kuota 15 parsing + 5 analisis per hari per user; tanya-bebas ditunda; catat tetap jalan saat kuota habis (parser aturan). Telegram long polling dari worker.
+- **Metrik:** `product_events` tanpa nominal/deskripsi; north star % hari tercatat (Novanda ≥ 85%, Farida ≥ 60%), median waktu catat ≤ 8 dtk, ≥ 70% catatan ≤ 3 ketukan.
+
+### 9.4 Milestone (menggantikan §6 dan `docs/v2/ROADMAP.md`)
+| | Isi | Gerbang keluar |
+|---|---|---|
+| **M0a** | Repo, CI dasar, design system + token, **prototipe klik** (Beranda, Catat, Transaksi, Dompet, onboarding) dengan seed `demo-full` | Novanda **dan** Farida menilai prototipe; arah visual dipilih |
+| **M0b** | Infra VM (Postgres terisolasi, `gw` mTLS, proxy VM App, DNS, backup + uji restore), deployer pull-based, auth (passkey/TOTP, kode pemulihan, undangan, batas 2 user), ruang, audit log, PWA installable | Restore teruji; login 2 akun dengan 2FA; isolasi ruang lulus pgTAP |
+| **M1** | Dompet + saldo awal + cocokkan saldo, kategori + saran, catat cepat + parser nominal, transaksi edit/void/undo, transfer (termasuk `space_transfer`), talangan kantor, `dq_reconcile` | Novanda memakai 7 hari berturut-turut, selisih rekonsiliasi 0 |
+| **M2** | Bersama penuh (setoran, feed, kontribusi), anggaran pribadi & bersama, laporan, Beranda "aman dipakai", tagihan rutin dasar, export CSV, worker | Farida bergabung; kedua akun 7 hari berturut-turut |
+| **M3** | Utang/piutang (termasuk utang berjalan tanpa efek kas), modal trading | T6–T10 lulus |
+| **M4** | Tujuan tabungan, aset & saham (harga server), net worth | T11 lulus |
+| **M5** | Trip, tagihan rutin lanjutan, export PDF | T14–T15 lulus |
+| **M6** | Catat teks bebas (aturan + LLM), analisis AI, PWA offline-baca | Eval set lulus target |
+| **M7** | Stabilisasi & portofolio: arsip ekspor v1, screenshot otomatis 390/1280 light/dark dari data demo, matikan v1 | Pemilik menyetujui |
+| **M8** | Bot Telegram (hanya bila dipakai sehari-hari) | |
+
+### 9.5 Menunggu pemilik
+1. Hasil `uname -m` di kedua VM dan tipe akun OCI (Always Free → upgrade ke Pay-As-You-Go).
+2. Konfirmasi deploy pull-based menggantikan self-hosted runner.
+3. Gemini tier berbayar (< $1/bln).
+4. Pemakaian Telegram sehari-hari (menentukan M8).
+5. Privasi ruang Pribadi terhadap admin server: diterima apa adanya (dengan audit log akses DB) atau enkripsi sisi klien untuk deskripsi (lebih rumit). Perlu dibicarakan dengan Farida.
+6. Aktifkan 2FA di akun GitHub dan Oracle Cloud sebelum M0b.

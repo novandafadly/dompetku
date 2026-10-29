@@ -1,5 +1,7 @@
 # DompetKu v2 — UX, Alur, dan Design System
 
+> **Catatan 2026-10-29:** sebagian dokumen ini sudah digantikan oleh `docs/superpowers/specs/2026-10-29-dompetku-v2-design.md` §9 (self-hosted, ruang Pribadi/Bersama, keputusan tim). Bila bertentangan, spec yang berlaku.
+
 Dasar: temuan 05-ux. Target: WCAG 2.2 AA, mobile-first (390px), desktop ≥ 1024px dengan sidebar.
 
 ## 1. Arsitektur informasi

@@ -1,5 +1,7 @@
 # DompetKu v2 — Rencana Pengerjaan
 
+> **Catatan 2026-10-29:** sebagian dokumen ini sudah digantikan oleh `docs/superpowers/specs/2026-10-29-dompetku-v2-design.md` §9 (self-hosted, ruang Pribadi/Bersama, keputusan tim). Bila bertentangan, spec yang berlaku.
+
 Setiap milestone bisa dijalankan dan diuji sendiri. Definisi selesai umum (berlaku untuk semua milestone):
 `tsc --noEmit`, ESLint, Prettier, Vitest, pgTAP (`supabase test db`), build, dan Playwright alur terkait **lulus di CI**;
 aplikasi dijalankan dan diverifikasi di browser pada 390px dan 1280px (screenshot di PR); axe 0 pelanggaran serious/critical pada layar baru;

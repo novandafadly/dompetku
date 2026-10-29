@@ -1,5 +1,7 @@
 # DompetKu v2 — Rancangan Arsitektur
 
+> **Catatan 2026-10-29:** sebagian dokumen ini sudah digantikan oleh `docs/superpowers/specs/2026-10-29-dompetku-v2-design.md` §9 (self-hosted, ruang Pribadi/Bersama, keputusan tim). Bila bertentangan, spec yang berlaku.
+
 Status: **draf untuk checkpoint Fase 2** (belum ada kode v2). Dasar: audit v1 di [`docs/audit/`](../audit/SUMMARY.md).
 Setiap keputusan besar menyajikan alternatif, trade-off, dan rekomendasi. Keputusan yang butuh pemilik produk dikumpulkan di §12.
 
