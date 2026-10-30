@@ -163,6 +163,8 @@ Keputusan builder (dapat ditinjau pemilik):
 - Nama subdomain akhir (usulan `dompet.novandafadly.com`) dan port Postgres DompetKu (usulan 5437).
 - Struktur detail monorepo (npm workspaces vs pnpm).
 
+**Status: DISETUJUI pemilik 2026-10-30** (termasuk 5 fitur tambahan di §9.4).
+
 ## 9. Keputusan tim (final setelah ronde 1–2, 2026-10-29)
 
 Sumber: `docs/team/round1/*` (10 peran), `docs/team/round2/register.md` + tinjauan PM, Backend, Security.
@@ -206,11 +208,11 @@ Bagian ini **mengalahkan** §1–8 di atas dan `docs/v2/*` bila bertentangan.
 | **M0a** | Repo, CI dasar, design system + token, **prototipe klik** (Beranda, Catat, Transaksi, Dompet, onboarding) dengan seed `demo-full` | Novanda **dan** Farida menilai prototipe; arah visual dipilih |
 | **M0b** | Infra VM (Postgres terisolasi, `gw` mTLS, proxy VM App, DNS, backup + uji restore), deployer pull-based, auth (passkey/TOTP, kode pemulihan, undangan, batas 2 user), ruang, audit log, PWA installable | Restore teruji; login 2 akun dengan 2FA; isolasi ruang lulus pgTAP |
 | **M1** | Dompet + saldo awal + cocokkan saldo, kategori + saran, catat cepat + parser nominal, transaksi edit/void/undo, transfer (termasuk `space_transfer`), talangan kantor, `dq_reconcile` | Novanda memakai 7 hari berturut-turut, selisih rekonsiliasi 0 |
-| **M2** | Bersama penuh (setoran, feed, kontribusi), anggaran pribadi & bersama, laporan, Beranda "aman dipakai", tagihan rutin dasar, export CSV, worker | Farida bergabung; kedua akun 7 hari berturut-turut |
-| **M3** | Utang/piutang (termasuk utang berjalan tanpa efek kas), modal trading | T6–T10 lulus |
+| **M2** | Bersama penuh (setoran, feed, kontribusi), anggaran pribadi & bersama, laporan, Beranda "aman dipakai", tagihan rutin dasar, export CSV, worker, **review bulanan** (bulan lalu vs rencana, salin anggaran 1 ketukan) | Farida bergabung; kedua akun 7 hari berturut-turut |
+| **M3** | Utang/piutang (termasuk utang berjalan tanpa efek kas), modal trading, **bagi tagihan Bersama** (pengeluaran Bersama dibayar dari dompet pribadi → saldo antar-anggota + pelunasan) | T6–T10 lulus |
 | **M4** | Tujuan tabungan, aset & saham (harga server), net worth | T11 lulus |
-| **M5** | Trip, tagihan rutin lanjutan, export PDF | T14–T15 lulus |
-| **M6** | Catat teks bebas (aturan + LLM), analisis AI, PWA offline-baca | Eval set lulus target |
+| **M5** | Trip, tagihan rutin lanjutan, export PDF, **kalender arus kas** (proyeksi saldo per tanggal), **deteksi langganan** (pola berulang → saran tagihan rutin) | T14–T15 lulus |
+| **M6** | Catat teks bebas (aturan + LLM), analisis AI, PWA offline-baca, **foto struk** (lampiran terenkripsi, tanpa OCR) | Eval set lulus target |
 | **M7** | Stabilisasi & portofolio: arsip ekspor v1, screenshot otomatis 390/1280 light/dark dari data demo, matikan v1 | Pemilik menyetujui |
 | **M8** | ~~Bot Telegram~~ — ditunda ke backlog (otomatisasi catat) | |
 
