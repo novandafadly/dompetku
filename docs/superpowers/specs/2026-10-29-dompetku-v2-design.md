@@ -212,7 +212,7 @@ Bagian ini **mengalahkan** §1–8 di atas dan `docs/v2/*` bila bertentangan.
 | **M5** | Trip, tagihan rutin lanjutan, export PDF | T14–T15 lulus |
 | **M6** | Catat teks bebas (aturan + LLM), analisis AI, PWA offline-baca | Eval set lulus target |
 | **M7** | Stabilisasi & portofolio: arsip ekspor v1, screenshot otomatis 390/1280 light/dark dari data demo, matikan v1 | Pemilik menyetujui |
-| **M8** | Bot Telegram (hanya bila dipakai sehari-hari) | |
+| **M8** | ~~Bot Telegram~~ — ditunda ke backlog (otomatisasi catat) | |
 
 ### 9.5 Jawaban pemilik (2026-10-30)
 1. Akun OCI **Pay-As-You-Go** (tidak ada risiko reklamasi Always Free). Arsitektur CPU diverifikasi saat M0b (`uname -m`); image tetap multi-arch.
@@ -222,7 +222,11 @@ Bagian ini **mengalahkan** §1–8 di atas dan `docs/v2/*` bila bertentangan.
 5. Privasi ruang Pribadi terhadap admin server **diterima** (tanpa enkripsi sisi klien); akses DB manual tercatat di audit log.
 6. 2FA GitHub & OCI **sudah aktif**.
 
-### 9.6 Kanal catat & AI (usulan, menunggu pilihan pemilik)
+### 9.6 Kanal catat & AI
+
+**Keputusan pemilik 2026-10-30: semua otomatisasi catat (email, WhatsApp, Telegram) DITUNDA ke backlog. M8 dikosongkan.** Model LLM untuk M6 diputuskan saat M6 (usulan: parser aturan → Haiku 5.5 dengan structured output + cek silang → eskalasi ke Opus 5.5; analisis bulanan Opus 5.5).
+
+Catatan opsi (arsip):
 - M1: catat cepat di PWA terpasang (ikon di layar utama, shortcut "Catat") + parser nominal.
 - M6: kolom teks bebas + dikte suara dari keyboard ponsel (tanpa izin mikrofon di app) memakai parser aturan + LLM.
 - M8 (pengganti Telegram), urutan rekomendasi: (a) **teruskan email notifikasi bank/e-wallet** ke alamat khusus → draf transaksi menunggu konfirmasi di app; (b) WhatsApp Cloud API resmi (Meta) dengan nomor khusus — pesan yang dikirim user dibalas gratis dalam jendela 24 jam, tetapi butuh Meta Business account dan nomor terpisah dari nomor pribadi; sandbox Twilio hanya untuk uji (sesi kedaluwarsa, butuh kode join) sehingga tidak cocok harian; library WhatsApp tidak resmi ditolak (risiko blokir nomor).
