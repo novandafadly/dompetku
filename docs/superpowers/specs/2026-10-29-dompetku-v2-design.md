@@ -214,10 +214,16 @@ Bagian ini **mengalahkan** §1–8 di atas dan `docs/v2/*` bila bertentangan.
 | **M7** | Stabilisasi & portofolio: arsip ekspor v1, screenshot otomatis 390/1280 light/dark dari data demo, matikan v1 | Pemilik menyetujui |
 | **M8** | Bot Telegram (hanya bila dipakai sehari-hari) | |
 
-### 9.5 Menunggu pemilik
-1. Hasil `uname -m` di kedua VM dan tipe akun OCI (Always Free → upgrade ke Pay-As-You-Go).
-2. Konfirmasi deploy pull-based menggantikan self-hosted runner.
-3. Gemini tier berbayar (< $1/bln).
-4. Pemakaian Telegram sehari-hari (menentukan M8).
-5. Privasi ruang Pribadi terhadap admin server: diterima apa adanya (dengan audit log akses DB) atau enkripsi sisi klien untuk deskripsi (lebih rumit). Perlu dibicarakan dengan Farida.
-6. Aktifkan 2FA di akun GitHub dan Oracle Cloud sebelum M0b.
+### 9.5 Jawaban pemilik (2026-10-30)
+1. Akun OCI **Pay-As-You-Go** (tidak ada risiko reklamasi Always Free). Arsitektur CPU diverifikasi saat M0b (`uname -m`); image tetap multi-arch.
+2. **Deploy pull-based disetujui** (§9.2).
+3. Pemilik punya API **Gemini dan Claude**. Provider AI di balik `LlmProvider`; pilihan model per tugas ditentukan pemilik (lihat §9.6).
+4. **Tidak memakai Telegram** → M8 diganti kanal catat alternatif (§9.6).
+5. Privasi ruang Pribadi terhadap admin server **diterima** (tanpa enkripsi sisi klien); akses DB manual tercatat di audit log.
+6. 2FA GitHub & OCI **sudah aktif**.
+
+### 9.6 Kanal catat & AI (usulan, menunggu pilihan pemilik)
+- M1: catat cepat di PWA terpasang (ikon di layar utama, shortcut "Catat") + parser nominal.
+- M6: kolom teks bebas + dikte suara dari keyboard ponsel (tanpa izin mikrofon di app) memakai parser aturan + LLM.
+- M8 (pengganti Telegram), urutan rekomendasi: (a) **teruskan email notifikasi bank/e-wallet** ke alamat khusus → draf transaksi menunggu konfirmasi di app; (b) WhatsApp Cloud API resmi (Meta) dengan nomor khusus — pesan yang dikirim user dibalas gratis dalam jendela 24 jam, tetapi butuh Meta Business account dan nomor terpisah dari nomor pribadi; sandbox Twilio hanya untuk uji (sesi kedaluwarsa, butuh kode join) sehingga tidak cocok harian; library WhatsApp tidak resmi ditolak (risiko blokir nomor).
+- Model LLM: default `claude-opus-5-5` (estimasi ±$4/bln untuk ±40 panggilan/hari) atau `claude-haiku-5-5` untuk parsing (±$0,1/bln) — dipilih pemilik; Gemini tetap bisa dipakai lewat provider yang sama.
